@@ -85,7 +85,7 @@ final class BackgroundScheduler {
         }
         
         // Refresh notifications using shared container
-        let context = await DataController.shared.container.mainContext
+        let context = DataController.shared.container.mainContext
         await NotificationManager.shared.refreshUpcomingNotifications(context: context)
         
         task.setTaskCompleted(success: true)
@@ -96,7 +96,7 @@ final class BackgroundScheduler {
     
     /// Manually refresh notifications (call on app launch and scene activation)
     func refreshNotifications() async {
-        let context = await DataController.shared.container.mainContext
+        let context = DataController.shared.container.mainContext
         await NotificationManager.shared.refreshUpcomingNotifications(context: context)
     }
 }
