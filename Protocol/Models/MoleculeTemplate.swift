@@ -165,7 +165,7 @@ final class MoleculeTemplate {
     /// - Returns: true if a template with this title exists
     static func titleExists(_ title: String, in context: ModelContext, excludingId: UUID? = nil) -> Bool {
         let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        var descriptor = FetchDescriptor<MoleculeTemplate>()
+        let descriptor = FetchDescriptor<MoleculeTemplate>()
         
         do {
             let allTemplates = try context.fetch(descriptor)
