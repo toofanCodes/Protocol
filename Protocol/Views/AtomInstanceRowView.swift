@@ -22,7 +22,7 @@ struct AtomInstanceRowView: View {
             // Title and progress
             VStack(alignment: .leading, spacing: 2) {
                 Text(atom.title)
-                    .font(.body)
+                    .font(.system(.body, design: .default, weight: .regular))
                     .strikethrough(atom.isCompleted && atom.inputType == .binary)
                     .foregroundStyle(atom.isCompleted ? .secondary : .primary)
                 
@@ -42,7 +42,7 @@ struct AtomInstanceRowView: View {
                     .tint(atom.isCompleted ? .green : Color.accentColor)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 12)
         .contentShape(Rectangle())
     }
     
@@ -53,26 +53,32 @@ struct AtomInstanceRowView: View {
         switch atom.inputType {
         case .binary:
             Button {
-                withAnimation(.spring(response: 0.3)) {
+                HapticFeedback.light()
+                withAnimation(.spring(response: DesignTokens.springResponse, dampingFraction: DesignTokens.springDamping)) {
                     atom.toggleComplete()
                 }
             } label: {
                 Image(systemName: atom.isCompleted ? "checkmark.circle.fill" : "circle")
                     .font(.title2)
                     .foregroundStyle(atom.isCompleted ? .green : .secondary)
+                    .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             
         case .counter:
             HStack(spacing: 8) {
                 Button {
-                    withAnimation(.spring(response: 0.2)) {
+                    HapticFeedback.light()
+                    withAnimation(.spring(response: DesignTokens.springResponse, dampingFraction: DesignTokens.springDamping)) {
                         atom.decrement()
                     }
                 } label: {
                     Image(systemName: "minus.circle.fill")
-                        .font(.title3)
+                        .font(.title2)
                         .foregroundColor(atom.currentValue ?? 0 > 0 ? Color.accentColor : Color.secondary.opacity(0.5))
+                        .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .disabled(atom.currentValue ?? 0 <= 0)
@@ -83,14 +89,17 @@ struct AtomInstanceRowView: View {
                     .frame(minWidth: 24)
                 
                 Button {
-                    withAnimation(.spring(response: 0.2)) {
+                    HapticFeedback.light()
+                    withAnimation(.spring(response: DesignTokens.springResponse, dampingFraction: DesignTokens.springDamping)) {
                         atom.increment()
                         moleculeService.checkForProgression(atomInstance: atom)
                     }
                 } label: {
                     Image(systemName: "plus.circle.fill")
-                        .font(.title3)
+                        .font(.title2)
                         .foregroundColor(Color.accentColor)
+                        .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
@@ -99,6 +108,7 @@ struct AtomInstanceRowView: View {
             Image(systemName: atom.isCompleted ? "checkmark.circle.fill" : "pencil.circle")
                 .font(.title2)
                 .foregroundColor(atom.isCompleted ? .green : Color.accentColor)
+                .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
         }
     }
 }

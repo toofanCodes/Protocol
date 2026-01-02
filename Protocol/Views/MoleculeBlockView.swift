@@ -52,8 +52,7 @@ struct MoleculeBlockView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .top) {
                     Text(instance.displayTitle)
-                        .font(.caption)
-                        .fontWeight(.bold)
+                        .font(.system(.subheadline, design: .rounded, weight: .heavy))
                         .foregroundStyle(.white)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -78,15 +77,20 @@ struct MoleculeBlockView: View {
                         .lineLimit(1)
                 }
             }
-            .padding(.vertical, 6)
-            .padding(.trailing, 6)
+            .padding(.vertical, 12)
+            .padding(.trailing, 8)
             
             Spacer(minLength: 0)
         }
-
-        .background(backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+        .background(
+            LinearGradient(
+                colors: [backgroundColor, backgroundColor.opacity(0.7)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.cornerRadiusMedium))
+        .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
         .contentShape(Rectangle())
     }
 }

@@ -31,11 +31,12 @@ struct SplashScreenView: View {
                         .frame(width: 150)
                     
                     // Tagline
-                    Text("Laying the foundation of your empire, one habit brick at a time!")
-                        .font(.system(.body, design: .rounded, weight: .medium))
+                    Text("Build Your Empire.\nOne Habit at a Time.")
+                        .font(.system(.callout, design: .serif, weight: .medium))
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 40)
+                        .minimumScaleFactor(0.8)
+                        .padding(.horizontal, 32)
                         .padding(.top, 20)
                     
                     Spacer()
@@ -50,12 +51,12 @@ struct SplashScreenView: View {
             }
             .onAppear {
                 // Fade in animation
-                withAnimation(.easeIn(duration: 1.0)) {
+                withAnimation(.easeIn(duration: 0.8)) {
                     opacity = 1.0
                 }
                 
-                // Transition to main app after 2.5 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                // Transition to main app after 1.5 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     withAnimation {
                         isActive = true
                     }

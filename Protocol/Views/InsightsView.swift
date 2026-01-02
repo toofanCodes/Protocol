@@ -89,7 +89,7 @@ struct SummaryCard: View {
                     icon: "flame.fill",
                     value: "\(stats.currentStreak)",
                     label: "Day Streak",
-                    color: stats.currentStreak > 0 ? .orange : .gray
+                    color: stats.currentStreak > 0 ? .empireGold : .gray
                 )
                 
                 Spacer()
@@ -116,11 +116,11 @@ struct SummaryCard: View {
         }
         .padding(20)
         .background(
-            RoundedRectangle(cornerRadius: 20)
+            RoundedRectangle(cornerRadius: DesignTokens.cornerRadiusLarge)
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.05), radius: 10, y: 5)
         )
-        .padding(.horizontal)
+        .padding(.horizontal, DesignTokens.paddingStandard)
     }
     
     private var statColor: Color {
@@ -298,7 +298,7 @@ struct ChartSection: View {
                     )
                     .foregroundStyle(
                         LinearGradient(
-                            colors: [.blue, .purple],
+                            colors: [.empireGold, .empireBronze],
                             startPoint: .bottom,
                             endPoint: .top
                         )
@@ -330,8 +330,8 @@ struct ChartSection: View {
         }
         .padding(.vertical)
         .background(Color(uiColor: .systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .padding(.horizontal)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.cornerRadiusMedium))
+        .padding(.horizontal, DesignTokens.paddingStandard)
     }
 }
 
@@ -427,9 +427,9 @@ struct HabitListCard: View {
                 }
             }
         }
-        .padding()
+        .padding(DesignTokens.paddingStandard)
         .background(Color(uiColor: .systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.cornerRadiusMedium))
         .sheet(isPresented: $showingAll) {
             AllHabitsSheet(
                 title: title,
