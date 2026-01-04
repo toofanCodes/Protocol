@@ -55,7 +55,11 @@ final class MoleculeInstance {
     /// Alert offsets in minutes before scheduled time
     /// Copied from parent template when instance is created
     /// Can be overridden per-instance
-    var alertOffsets: [Int]
+    var alertOffsets: [Int] = [15]
+    
+    /// Whether this is an all-day event (no specific time)
+    /// Inherited from parent template when created
+    var isAllDay: Bool = false
     
     // MARK: - Relationships
     
@@ -86,6 +90,7 @@ final class MoleculeInstance {
         exceptionTime: Date? = nil,
         parentTemplate: MoleculeTemplate? = nil,
         alertOffsets: [Int]? = nil,
+        isAllDay: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         notes: String? = nil
@@ -99,6 +104,8 @@ final class MoleculeInstance {
         self.parentTemplate = parentTemplate
         // Use provided offsets, or inherit from template, or default to [15]
         self.alertOffsets = alertOffsets ?? parentTemplate?.alertOffsets ?? [15]
+        // Inherit isAllDay from template if not explicitly set
+        self.isAllDay = isAllDay || (parentTemplate?.isAllDay ?? false)
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.notes = notes

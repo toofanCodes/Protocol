@@ -54,7 +54,11 @@ final class MoleculeTemplate {
     /// Alert offsets in minutes before scheduled time
     /// Default: [15] (15 minutes before)
     /// Example: [0, 15, 60] = at time, 15 min before, 1 hour before
-    var alertOffsets: [Int]
+    var alertOffsets: [Int] = [15]
+    
+    /// Whether this molecule is an all-day event (no specific time)
+    /// All-day molecules appear in a separate dock above the timeline
+    var isAllDay: Bool = false
     
     // MARK: - Relationships
     
@@ -83,6 +87,7 @@ final class MoleculeTemplate {
         notes: String? = nil,
         compound: String? = nil,
         alertOffsets: [Int] = [15],
+        isAllDay: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -97,6 +102,7 @@ final class MoleculeTemplate {
         self.notes = notes
         self.compound = compound
         self.alertOffsets = alertOffsets
+        self.isAllDay = isAllDay
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -236,7 +242,8 @@ final class MoleculeTemplate {
                 if let scheduledDate = calendar.date(from: dateComponents) {
                     let instance = MoleculeInstance(
                         scheduledDate: scheduledDate,
-                        parentTemplate: self
+                        parentTemplate: self,
+                        isAllDay: self.isAllDay
                     )
                     
                     // Clone all AtomTemplates into AtomInstances
@@ -292,7 +299,8 @@ final class MoleculeTemplate {
                 if let scheduledDate = calendar.date(from: dateComponents) {
                     let instance = MoleculeInstance(
                         scheduledDate: scheduledDate,
-                        parentTemplate: self
+                        parentTemplate: self,
+                        isAllDay: self.isAllDay
                     )
                     
                     for atomTemplate in sortedAtomTemplates {

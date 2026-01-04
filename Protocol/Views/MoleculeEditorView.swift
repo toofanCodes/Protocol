@@ -27,6 +27,7 @@ struct MoleculeEditorView: View {
     @State private var editedTitle: String = ""
     @State private var editedTime: Date = Date()
     @State private var editedNotes: String = ""
+    @State private var isAllDay: Bool = false
     
     @State private var showingSaveActionSheet = false
     @State private var showingDeleteActionSheet = false
@@ -54,13 +55,20 @@ struct MoleculeEditorView: View {
                             checkForChanges()
                         }
                     
-                    DatePicker(
-                        "Time",
-                        selection: $editedTime,
-                        displayedComponents: .hourAndMinute
-                    )
-                    .onChange(of: editedTime) { _, _ in
-                        checkForChanges()
+                    Toggle("All Day", isOn: $isAllDay)
+                        .onChange(of: isAllDay) { _, _ in
+                            checkForChanges()
+                        }
+                    
+                    if !isAllDay {
+                        DatePicker(
+                            "Time",
+                            selection: $editedTime,
+                            displayedComponents: .hourAndMinute
+                        )
+                        .onChange(of: editedTime) { _, _ in
+                            checkForChanges()
+                        }
                     }
                     
                     DatePicker(
@@ -200,14 +208,16 @@ struct MoleculeEditorView: View {
         editedTitle = instance.displayTitle
         editedTime = instance.effectiveTime
         editedNotes = instance.notes ?? ""
+        isAllDay = instance.isAllDay
     }
     
     private func checkForChanges() {
         let titleChanged = editedTitle != instance.displayTitle
         let timeChanged = !Calendar.current.isDate(editedTime, equalTo: instance.effectiveTime, toGranularity: .minute)
         let notesChanged = editedNotes != (instance.notes ?? "")
+        let allDayChanged = isAllDay != instance.isAllDay
         
-        hasChanges = titleChanged || timeChanged || notesChanged
+        hasChanges = titleChanged || timeChanged || notesChanged || allDayChanged
     }
     
     private func handleSave() {

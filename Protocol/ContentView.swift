@@ -25,6 +25,11 @@ struct ContentView: View {
                 .tabItem {
                     Label("Insights", systemImage: "chart.bar.xaxis")
                 }
+            
+            SettingsView()
+                .tabItem {
+                    Label("HQ", systemImage: "building.columns")
+                }
         }
     }
 }
@@ -145,11 +150,15 @@ struct MoleculeTemplateDetailView: View {
             Section("Template Info") {
                 TextField("Title", text: $template.title)
                 
-                DatePicker(
-                    "Base Time",
-                    selection: $template.baseTime,
-                    displayedComponents: .hourAndMinute
-                )
+                Toggle("All Day", isOn: $template.isAllDay)
+                
+                if !template.isAllDay {
+                    DatePicker(
+                        "Base Time",
+                        selection: $template.baseTime,
+                        displayedComponents: .hourAndMinute
+                    )
+                }
                 
                 Button {
                     showingRecurrencePicker = true
@@ -484,6 +493,8 @@ struct MoleculeInstanceDetailView: View {
     
     @State private var atomForValueEntry: AtomInstance?
     @State private var atomForWorkoutLog: AtomInstance?
+    @State private var showingRescheduleSheet = false
+    @State private var rescheduleDate: Date = Date()
     
     private var sortedAtoms: [AtomInstance] {
         instance.atomInstances.sorted { $0.order < $1.order }
@@ -557,6 +568,24 @@ struct MoleculeInstanceDetailView: View {
                     }
                 }
             }
+            
+            // Reschedule Section
+            if !instance.isCompleted {
+                Section("Reschedule") {
+                    Button {
+                        postponeToTomorrow()
+                    } label: {
+                        Label("Postpone to Tomorrow", systemImage: "arrow.forward.circle")
+                    }
+                    
+                    Button {
+                        rescheduleDate = instance.scheduledDate
+                        showingRescheduleSheet = true
+                    } label: {
+                        Label("Pick a Different Date", systemImage: "calendar")
+                    }
+                }
+            }
         }
         .navigationTitle(instance.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -565,6 +594,34 @@ struct MoleculeInstanceDetailView: View {
         }
         .sheet(item: $atomForWorkoutLog) { atom in
             AtomDetailSheet(atom: atom)
+        }
+        .sheet(isPresented: $showingRescheduleSheet) {
+            NavigationStack {
+                Form {
+                    DatePicker(
+                        "New Date",
+                        selection: $rescheduleDate,
+                        in: Date()...,
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                    .datePickerStyle(.graphical)
+                }
+                .navigationTitle("Reschedule")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showingRescheduleSheet = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            rescheduleInstance(to: rescheduleDate)
+                            showingRescheduleSheet = false
+                        }
+                        .fontWeight(.semibold)
+                    }
+                }
+            }
+            .presentationDetents([.medium])
         }
         .onChange(of: sortedAtoms.map(\.isCompleted)) { _, newValue in
             // Auto-complete instance when all atoms are done
@@ -600,6 +657,32 @@ struct MoleculeInstanceDetailView: View {
             } else {
                 atomForValueEntry = atom
             }
+        }
+    }
+    
+    private func postponeToTomorrow() {
+        let calendar = Calendar.current
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: instance.scheduledDate) {
+            rescheduleInstance(to: tomorrow)
+        }
+    }
+    
+    private func rescheduleInstance(to newDate: Date) {
+        // Store original date for tracking
+        if instance.originalScheduledDate == nil {
+            instance.originalScheduledDate = instance.scheduledDate
+        }
+        
+        instance.scheduledDate = newDate
+        instance.isException = true
+        instance.exceptionTime = newDate
+        instance.updatedAt = Date()
+        
+        try? modelContext.save()
+        
+        // Reschedule notifications
+        Task {
+            await NotificationManager.shared.scheduleNotifications(for: instance)
         }
     }
 }

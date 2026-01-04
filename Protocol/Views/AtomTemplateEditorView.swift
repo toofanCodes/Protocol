@@ -107,9 +107,9 @@ struct AtomTemplateEditorView: View {
                 // Workout Configuration (for value type)
                 if inputType == .value {
                     Section {
-                        Toggle("Workout Exercise", isOn: $isWorkoutExercise)
+                        Toggle("Timed Sessions", isOn: $isWorkoutExercise)
                     } footer: {
-                        Text("Enable to track sets, reps, and rest time for gym exercises.")
+                        Text("Enable to track sets, reps, and rest intervals between timed sessions.")
                     }
                     
                     if isWorkoutExercise {

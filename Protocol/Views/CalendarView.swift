@@ -18,6 +18,8 @@ struct CalendarView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var draggingInstance: MoleculeInstance?
     @State private var dragOffset: CGSize = .zero
+    @State private var instanceToDelete: MoleculeInstance?
+    @State private var showingDeleteConfirmation = false
     
     // Long press to create new habit
     @State private var showingNewHabitSheet = false
@@ -90,7 +92,43 @@ struct CalendarView: View {
                     NewHabitFromLongPressView(prefilledTime: longPressTime)
                 }
             }
+            .alert("Delete Instance?", isPresented: $showingDeleteConfirmation) {
+                Button("Cancel", role: .cancel) { instanceToDelete = nil }
+                Button("Delete", role: .destructive) {
+                    if let instance = instanceToDelete {
+                        deleteInstance(instance)
+                    }
+                    instanceToDelete = nil
+                }
+            } message: {
+                Text("This will permanently remove this scheduled instance.")
+            }
         }
+    }
+    
+    // MARK: - Delete Action
+    
+    private func deleteInstance(_ instance: MoleculeInstance) {
+        NotificationManager.shared.cancelNotification(for: instance)
+        modelContext.delete(instance)
+        try? modelContext.save()
+    }
+    
+    private func requestDelete(_ instance: MoleculeInstance) {
+        instanceToDelete = instance
+        showingDeleteConfirmation = true
+    }
+    
+    private func toggleComplete(_ instance: MoleculeInstance) {
+        instance.toggleComplete()
+        if instance.isCompleted {
+            NotificationManager.shared.cancelNotification(for: instance)
+        } else {
+            Task {
+                await NotificationManager.shared.scheduleNotifications(for: instance)
+            }
+        }
+        try? modelContext.save()
     }
     
     // MARK: - Drag & Drop Logic (Day View)
@@ -310,7 +348,40 @@ struct DayView: View {
         return (normalizedHour + normalizedMinute) * Double(hourHeight) + 20
     }
     
+    /// All-day instances sorted alphabetically
+    private var allDayInstances: [MoleculeInstance] {
+        instances.filter { $0.isAllDay }
+            .sorted { $0.displayTitle < $1.displayTitle }
+    }
+    
+    /// Timed instances (non all-day)
+    private var timedInstances: [MoleculeInstance] {
+        instances.filter { !$0.isAllDay }
+    }
+    
     var body: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                // Section A: All-Day Dock (max 30% height)
+                if !allDayInstances.isEmpty {
+                    AllDayDockView(
+                        instances: allDayInstances,
+                        viewModel: viewModel
+                    )
+                    .frame(maxHeight: geometry.size.height * 0.3)
+                    
+                    Divider()
+                }
+                
+                // Section B: Timeline
+                timelineView
+            }
+        }
+    }
+    
+    // MARK: - Timeline View (extracted for clarity)
+    
+    private var timelineView: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 ZStack(alignment: .topLeading) {
@@ -340,8 +411,8 @@ struct DayView: View {
                             .offset(y: currentTimeYPosition)
                     }
                     
-                    // Molecules
-                    ForEach(instances) { instance in
+                    // Only show timed instances in timeline
+                    ForEach(timedInstances) { instance in
                         DraggableMoleculeBlock(
                             instance: instance,
                             position: calculatePosition(for: instance),
@@ -357,6 +428,15 @@ struct DayView: View {
                             },
                             onTap: {
                                 viewModel.selectedInstance = instance
+                            },
+                            onComplete: {
+                                instance.toggleComplete()
+                                if instance.isCompleted {
+                                    NotificationManager.shared.cancelNotification(for: instance)
+                                }
+                            },
+                            onDelete: {
+                                NotificationManager.shared.cancelNotification(for: instance)
                             }
                         )
                     }
@@ -474,6 +554,109 @@ struct NowIndicatorLine: View {
     }
 }
 
+// MARK: - All-Day Components
+
+/// Dock view for all-day molecules at the top of DayView
+struct AllDayDockView: View {
+    let instances: [MoleculeInstance]
+    @ObservedObject var viewModel: CalendarViewModel
+    @Environment(\.modelContext) private var modelContext
+    
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                // Header
+                HStack {
+                    Text("All Day")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(instances.count)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal)
+                
+                // Banners
+                ForEach(instances) { instance in
+                    AllDayBanner(instance: instance)
+                        .onTapGesture {
+                            viewModel.selectedInstance = instance
+                        }
+                        .contextMenu {
+                            Button {
+                                instance.toggleComplete()
+                                if instance.isCompleted {
+                                    NotificationManager.shared.cancelNotification(for: instance)
+                                }
+                                try? modelContext.save()
+                            } label: {
+                                Label(
+                                    instance.isCompleted ? "Mark Incomplete" : "Mark Complete",
+                                    systemImage: instance.isCompleted ? "xmark.circle" : "checkmark.circle"
+                                )
+                            }
+                            
+                            Button {
+                                viewModel.selectedInstance = instance
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            
+                            Divider()
+                            
+                            Button(role: .destructive) {
+                                NotificationManager.shared.cancelNotification(for: instance)
+                                modelContext.delete(instance)
+                                try? modelContext.save()
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                }
+            }
+            .padding(.vertical, 8)
+        }
+        .background(Color(uiColor: .systemBackground))
+    }
+}
+
+/// Banner-style display for a single all-day molecule
+struct AllDayBanner: View {
+    let instance: MoleculeInstance
+    
+    var body: some View {
+        HStack(spacing: 10) {
+            // Status indicator
+            Circle()
+                .fill(instance.isCompleted ? Color.green : Color.accentColor)
+                .frame(width: 8, height: 8)
+            
+            // Title
+            Text(instance.displayTitle)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .strikethrough(instance.isCompleted)
+                .foregroundStyle(instance.isCompleted ? .secondary : .primary)
+            
+            Spacer()
+            
+            // Completion indicator
+            if instance.isCompleted {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.caption)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color(uiColor: .secondarySystemBackground))
+        .cornerRadius(8)
+        .padding(.horizontal)
+    }
+}
+
 struct MonthView: View {
     @ObservedObject var viewModel: CalendarViewModel
     let allInstances: [MoleculeInstance]
@@ -553,6 +736,7 @@ struct MonthDayCell: View {
 struct WeekView: View {
     @ObservedObject var viewModel: CalendarViewModel
     let allInstances: [MoleculeInstance]
+    @Environment(\.modelContext) private var modelContext
     
     private var daysOfWeek: [Date] {
         let start = viewModel.currentDate.startOfWeek
@@ -578,6 +762,36 @@ struct WeekView: View {
                                 MoleculeBlockView(instance: instance)
                                     .onTapGesture {
                                         viewModel.selectedInstance = instance
+                                    }
+                                    .contextMenu {
+                                        Button {
+                                            instance.toggleComplete()
+                                            if instance.isCompleted {
+                                                NotificationManager.shared.cancelNotification(for: instance)
+                                            }
+                                            try? modelContext.save()
+                                        } label: {
+                                            Label(
+                                                instance.isCompleted ? "Mark Incomplete" : "Mark Complete",
+                                                systemImage: instance.isCompleted ? "xmark.circle" : "checkmark.circle"
+                                            )
+                                        }
+                                        
+                                        Button {
+                                            viewModel.selectedInstance = instance
+                                        } label: {
+                                            Label("Edit", systemImage: "pencil")
+                                        }
+                                        
+                                        Divider()
+                                        
+                                        Button(role: .destructive) {
+                                            NotificationManager.shared.cancelNotification(for: instance)
+                                            modelContext.delete(instance)
+                                            try? modelContext.save()
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
                                     }
                             }
                         }
@@ -613,11 +827,40 @@ struct DraggableMoleculeBlock: View {
     let onDragChanged: (CGSize) -> Void
     let onDragEnded: (CGSize) -> Void
     let onTap: () -> Void
+    var onComplete: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
     
     var body: some View {
         MoleculeBlockView(instance: instance)
             .onTapGesture {
                 onTap()
+            }
+            .contextMenu {
+                // Complete/Incomplete Toggle
+                Button {
+                    onComplete?()
+                } label: {
+                    Label(
+                        instance.isCompleted ? "Mark Incomplete" : "Mark Complete",
+                        systemImage: instance.isCompleted ? "xmark.circle" : "checkmark.circle"
+                    )
+                }
+                
+                // Edit Option
+                Button {
+                    onTap()
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                
+                Divider()
+                
+                // Delete Option
+                Button(role: .destructive) {
+                    onDelete?()
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
             }
             .frame(height: height)
             .frame(maxWidth: .infinity)
@@ -627,7 +870,7 @@ struct DraggableMoleculeBlock: View {
             .offset(y: isDragging ? dragOffset.height : 0)
             .zIndex(isDragging ? 100 : 1)
             .gesture(
-                LongPressGesture(minimumDuration: 0.3)
+                LongPressGesture(minimumDuration: 0.5)
                     .sequenced(before: DragGesture())
                     .onChanged { value in
                         switch value {
@@ -647,8 +890,6 @@ struct DraggableMoleculeBlock: View {
                         }
                     }
             )
-            // Overlay logic moved to parent or modified to accept tap
-            // We removed NavigationLink overlay in init so onTapGesture works in parent
     }
 }
 
@@ -669,6 +910,7 @@ struct NewHabitFromLongPressView: View {
     @State private var title: String = ""
     @State private var selectedTime: Date
     @State private var recurrenceFreq: RecurrenceFrequency = .daily
+    @State private var isAllDay: Bool = false
     
     init(prefilledTime: Date) {
         self.prefilledTime = prefilledTime
@@ -680,7 +922,11 @@ struct NewHabitFromLongPressView: View {
             Section("Habit Details") {
                 TextField("Habit Name", text: $title)
                 
-                DatePicker("Start Time", selection: $selectedTime, displayedComponents: .hourAndMinute)
+                Toggle("All Day", isOn: $isAllDay)
+                
+                if !isAllDay {
+                    DatePicker("Start Time", selection: $selectedTime, displayedComponents: .hourAndMinute)
+                }
                 
                 Picker("Repeat", selection: $recurrenceFreq) {
                     ForEach(RecurrenceFrequency.allCases, id: \.self) { freq in
@@ -689,11 +935,13 @@ struct NewHabitFromLongPressView: View {
                 }
             }
             
-            Section {
-                Text("Time: \(selectedTime.formatted(date: .omitted, time: .shortened))")
-                    .foregroundStyle(.secondary)
-            } footer: {
-                Text("Long press detected at this time. You can adjust it above.")
+            if !isAllDay {
+                Section {
+                    Text("Time: \(selectedTime.formatted(date: .omitted, time: .shortened))")
+                        .foregroundStyle(.secondary)
+                } footer: {
+                    Text("Long press detected at this time. You can adjust it above.")
+                }
             }
         }
         .navigationTitle("New Habit")
@@ -715,7 +963,8 @@ struct NewHabitFromLongPressView: View {
         let template = MoleculeTemplate(
             title: title,
             baseTime: selectedTime,
-            recurrenceFreq: recurrenceFreq
+            recurrenceFreq: recurrenceFreq,
+            isAllDay: isAllDay
         )
         
         modelContext.insert(template)
