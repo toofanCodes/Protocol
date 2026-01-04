@@ -4,33 +4,47 @@
 
 Protocol is a native iOS application designed to help users build **compound routines**. Unlike traditional habit trackers that treat goals as isolated checkboxes, Protocol organizes them into systems ("Molecules") composed of individual actions ("Atoms").
 
-![Platform](https://img.shields.io/badge/Platform-iOS-blue)
-![Lang](https://img.shields.io/badge/Language-Swift%205-orange)
-![Stack](https://img.shields.io/badge/Stack-SwiftUI%20%7C%20SwiftData%20%7C%20WidgetKit-green)
+![Platform](https://img.shields.io/badge/Platform-iOS%2017+-blue)
+![Swift](https://img.shields.io/badge/Swift-5.9-orange)
+![SwiftData](https://img.shields.io/badge/Data-SwiftData-green)
+![Widget](https://img.shields.io/badge/Widget-WidgetKit-purple)
 
 ---
 
-## 🧪 Concepts
+## 🧪 Core Concepts
 
-- **Molecule**: A complete routine (e.g., "Morning Protocol"). Scheduled at a specific time.
-- **Atom**: A single atomic unit of work inside a Molecule (e.g., "Drink Water", "Read 10 mins").
-- **Compound Growth**: Consistent execution of Atoms builds streaks and momentum for the parent Molecule.
+| Concept | Description |
+|---------|-------------|
+| **Molecule** | A complete routine (e.g., "Morning Protocol") scheduled at a specific time |
+| **Atom** | A single task inside a Molecule (e.g., "Drink Water", "Read 10 mins") |
+| **Instance** | A specific occurrence of a Molecule on a given date |
+| **Compound Growth** | Consistent execution builds streaks and momentum |
+
+---
 
 ## ✨ Features
 
-- **Contextual Tracking**: Group related habits into powerful routines.
-- **Smart Reminders**: Set multiple alerts per routine (e.g., 15 min before AND 1 hour before).
-- **Home Screen Widget**: Interactive widget to view and complete tasks directly from the home screen.
-- **Offline First**: All data is stored locally on-device using SwiftData. No accounts, no tracking.
-- **Insights**: Visual dashboards for streaks, consistency, and completion history.
+- 📦 **Contextual Tracking** — Group related habits into powerful routines
+- ⏰ **Smart Reminders** — Multiple alerts per routine (15 min, 1 hour, etc.)
+- 📱 **Home Screen Widget** — View and complete tasks directly from home screen
+- 💾 **Offline First** — All data stored locally with SwiftData
+- 📊 **Insights** — Visual dashboards for streaks and completion history
+- 🏋️ **Workout Tracking** — Sets, reps, weight logging for exercise atoms
+- 🎨 **All-Day Events** — Support for habits without specific times
+
+---
 
 ## 🛠 Tech Stack
 
-- **UI**: SwiftUI
-- **Data**: SwiftData (Local Persistence)
-- **Widgets**: WidgetKit
-- **Background**: BGTaskScheduler (Background Fetch)
-- **Notifications**: UserNotifications (Local)
+| Layer | Technology |
+|-------|------------|
+| **UI** | SwiftUI |
+| **Data** | SwiftData with VersionedSchema |
+| **Widgets** | WidgetKit |
+| **Background** | BGTaskScheduler |
+| **Notifications** | UserNotifications (Local) |
+
+---
 
 ## 🚀 Getting Started
 
@@ -40,34 +54,77 @@ Protocol is a native iOS application designed to help users build **compound rou
 
 ### Installation
 
-1. Clone the repository
-   ```bash
-   git clone https://github.com/yourusername/protocol.git
-   ```
-2. Open `Protocol.xcodeproj` in Xcode.
-3. Trust the signing profile if necessary.
+```bash
+git clone https://github.com/yourusername/protocol.git
+cd protocol
+open Protocol.xcodeproj
+```
 
-### Important Configuration
-The app uses **Background Tasks** for notification scheduling. Ensure your target's `Info.plist` includes:
+### Configuration
 
-- **Background Modes**: "Background fetch" enabled.
-- **Permitted Identifiers**: `com.protocol.notification.refresh`
+The app uses App Groups for widget data sharing:
+- **App Group ID**: `group.com.Toofan.Toofanprotocol.shared`
+
+Ensure both targets (Protocol and ProtocolWidgetExtension) have this capability enabled.
+
+---
 
 ## 🏗 Architecture
 
-The app uses a modern **MVVM** architecture with **SwiftData** for the model layer.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed documentation.
 
-- **Models**: `MoleculeTemplate`, `MoleculeInstance`, `AtomTemplate`, `AtomInstance`.
-- **ViewModels**: `MoleculeViewModel` (managed via `MoleculeService`).
-- **Views**: Composable SwiftUI views split into `Components`, `Screens`, and `Sheets`.
+### Quick Overview
+
+```
+Protocol/
+├── Protocol/           # Main App
+│   ├── Data/           # DataController, Migration Plan
+│   ├── Models/         # SwiftData @Model classes
+│   ├── Views/          # SwiftUI Views
+│   └── Helpers/        # Services & Managers
+├── ProtocolWidget/     # Home Screen Widget
+└── ProtocolTests/      # Unit Tests
+```
+
+### Data Model
+
+```
+MoleculeTemplate → MoleculeInstance → AtomInstance → WorkoutSet
+                 ↳ AtomTemplate
+```
+
+---
+
+## 🧪 Testing
+
+```bash
+# Run all tests
+xcodebuild test -scheme Protocol -destination 'platform=iOS Simulator,name=iPhone 16 Pro'
+```
+
+Or press **Cmd+U** in Xcode.
+
+---
 
 ## 🔒 Privacy
 
-Protocol is privacy-first.
-- No analytics.
-- No third-party trackers.
-- All data stays on the user's device.
+Protocol is **privacy-first**:
+- ✅ No analytics or tracking
+- ✅ No network requests
+- ✅ All data stays on-device
+- ✅ No accounts required
+
+---
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 🏷 Version History
+
+| Version | Date | Notes |
+|---------|------|-------|
+| 1.0.0 | Jan 2026 | Initial release with migration safety |
+
