@@ -31,6 +31,9 @@ Protocol is a native iOS application designed to help users build **compound rou
 - 📊 **Insights** — Visual dashboards for streaks and completion history
 - 🏋️ **Workout Tracking** — Sets, reps, weight logging for exercise atoms
 - 🎨 **All-Day Events** — Support for habits without specific times
+- 🏗️ **Blueprint Architect** — Bulk import habits via CSV with recurrence & compound support
+- 🎉 **Gamification** — Confetti, claps, and sound effects on task completion
+- 🗂️ **Compounds** — Organize molecules into categories (Fitness, Wellness, etc.)
 
 ---
 
@@ -132,4 +135,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 | Version | Date | Notes |
 |---------|------|-------|
+| 1.1.0 | Jan 2026 | Blueprint Architect CSV import, Gamification, Compounds |
 | 1.0.0 | Jan 2026 | Initial release with migration safety |
