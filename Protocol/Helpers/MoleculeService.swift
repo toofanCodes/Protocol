@@ -40,6 +40,16 @@ final class MoleculeService: ObservableObject {
         
         try? modelContext.save()
         
+        // Audit log
+        Task {
+            await AuditLogger.shared.logCreate(
+                entityType: .moleculeTemplate,
+                entityId: template.id.uuidString,
+                entityName: template.title,
+                additionalInfo: "Generated \(instances.count) instances"
+            )
+        }
+        
         // Schedule notifications
         Task {
             await NotificationManager.shared.scheduleNotifications(for: instances)
@@ -48,13 +58,70 @@ final class MoleculeService: ObservableObject {
         return instances
     }
     
+    /// Backfills instances for a template for a past date range
+    /// - Parameters:
+    ///   - template: The template to backfill
+    ///   - startDate: The start date (inclusive)
+    ///   - endDate: The end date (inclusive)
+    /// - Returns: The newly generated instances
+    @discardableResult
+    func backfillInstances(for template: MoleculeTemplate, from startDate: Date, to endDate: Date) -> [MoleculeInstance] {
+        // Generate instances for the specified range
+        let newInstances = template.generateInstances(from: startDate, until: endDate, in: modelContext)
+        
+        for instance in newInstances {
+            modelContext.insert(instance)
+        }
+        
+        try? modelContext.save()
+        
+        // Audit log
+        Task {
+            await AuditLogger.shared.logCreate(
+                entityType: .moleculeInstance,
+                entityId: template.id.uuidString, // Using template ID as reference
+                entityName: "Backfill: \(template.title)",
+                additionalInfo: "Backfilled \(newInstances.count) instances from \(startDate.formatted(date: .numeric, time: .omitted))"
+            )
+        }
+        
+        return newInstances
+    }
+    
     /// Deletes a template and all its instances
+    /// Deletes a template (Soft Delete/Archive)
+    /// Marks as archived and removes future instances. Preserves history.
     func deleteTemplate(_ template: MoleculeTemplate) {
+        let templateName = template.title
+        let templateId = template.id.uuidString
+        
+        // 1. Archive Template
+        template.isArchived = true
+        
+        // 2. Delete Future Instances
+        let now = Date()
+        let instancesToDelete = template.instances.filter { $0.scheduledDate > now }
+        let deleteCount = instancesToDelete.count
+        
+        for instance in instancesToDelete {
+            NotificationManager.shared.cancelNotification(for: instance)
+            modelContext.delete(instance)
+        }
+        
         // Cancel notifications
         NotificationManager.shared.cancelNotifications(for: template)
         
-        modelContext.delete(template)
         try? modelContext.save()
+        
+        // Audit log
+        Task {
+            await AuditLogger.shared.logDelete(
+                entityType: .moleculeTemplate,
+                entityId: templateId,
+                entityName: templateName,
+                additionalInfo: "Soft deleted (Archived). Removed \(deleteCount) future instances."
+            )
+        }
     }
     
     // MARK: - Instance Operations
@@ -73,20 +140,59 @@ final class MoleculeService: ObservableObject {
     
     /// Marks an instance as complete
     func markComplete(_ instance: MoleculeInstance) {
+        let wasCompleted = instance.isCompleted
         instance.markComplete()
         try? modelContext.save()
+        
+        // Audit log
+        Task {
+            await AuditLogger.shared.logUpdate(
+                entityType: .moleculeInstance,
+                entityId: instance.id.uuidString,
+                entityName: instance.displayTitle,
+                changes: [AuditLogger.fieldChange("isCompleted", old: "\(wasCompleted)", new: "true")].compactMap { $0 }
+            )
+        }
     }
     
     /// Marks an instance as incomplete
     func markIncomplete(_ instance: MoleculeInstance) {
+        let wasCompleted = instance.isCompleted
         instance.markIncomplete()
         try? modelContext.save()
+        
+        // Audit log
+        Task {
+            await AuditLogger.shared.logUpdate(
+                entityType: .moleculeInstance,
+                entityId: instance.id.uuidString,
+                entityName: instance.displayTitle,
+                changes: [AuditLogger.fieldChange("isCompleted", old: "\(wasCompleted)", new: "false")].compactMap { $0 }
+            )
+        }
     }
     
     /// Snoozes an instance by specified minutes
     func snooze(_ instance: MoleculeInstance, byMinutes minutes: Int) {
+        let oldDate = instance.scheduledDate
         instance.snooze(by: minutes)
         try? modelContext.save()
+        
+        // Audit log
+        Task {
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            
+            await AuditLogger.shared.logUpdate(
+                entityType: .moleculeInstance,
+                entityId: instance.id.uuidString,
+                entityName: instance.displayTitle,
+                changes: [
+                    AuditLogger.fieldChange("scheduledDate", old: formatter.string(from: oldDate), new: formatter.string(from: instance.scheduledDate))
+                ].compactMap { $0 },
+                additionalInfo: "Snoozed by \(minutes)m"
+            )
+        }
     }
     
     // MARK: - Edit Operations (The "Apple Calendar" Standard)
@@ -103,6 +209,11 @@ final class MoleculeService: ObservableObject {
     ///   - instance: The instance to update
     ///   - changes: The changes to apply
     func updateThisEventOnly(_ instance: MoleculeInstance, with changes: InstanceChanges) {
+        // Capture old state for audit
+        let oldTitle = instance.exceptionTitle
+        let oldTime = instance.scheduledDate
+        let oldNotes = instance.notes
+        
         // Mark as exception
         instance.isException = true
         
@@ -123,6 +234,44 @@ final class MoleculeService: ObservableObject {
         
         instance.updatedAt = Date()
         try? modelContext.save()
+        
+        // Audit log
+        Task {
+            var fieldChanges: [FieldChange] = []
+            
+            // Title Check
+            if let newTitle = changes.title {
+                if let change = AuditLogger.fieldChange("title", old: oldTitle ?? instance.parentTemplate?.title, new: newTitle) {
+                    fieldChanges.append(change)
+                }
+            }
+            
+            // Time Check
+            if let newTime = changes.scheduledTime {
+                let formatter = DateFormatter()
+                formatter.timeStyle = .short
+                let oldTimeStr = formatter.string(from: oldTime)
+                let newTimeStr = formatter.string(from: newTime)
+                if let change = AuditLogger.fieldChange("scheduledDate", old: oldTimeStr, new: newTimeStr) {
+                    fieldChanges.append(change)
+                }
+            }
+            
+            // Notes Check
+            if let newNotes = changes.notes {
+                if let change = AuditLogger.fieldChange("notes", old: oldNotes, new: newNotes) {
+                    fieldChanges.append(change)
+                }
+            }
+            
+            await AuditLogger.shared.logUpdate(
+                entityType: .moleculeInstance,
+                entityId: instance.id.uuidString,
+                entityName: instance.displayTitle,
+                changes: fieldChanges,
+                additionalInfo: "Edit Scope: This Event Only"
+            )
+        }
     }
     
     /// Updates the template and regenerates all future instances
@@ -135,6 +284,10 @@ final class MoleculeService: ObservableObject {
             updateThisEventOnly(instance, with: changes)
             return
         }
+        
+        // Capture old state
+        let oldTitle = template.title
+        let oldTime = template.baseTime
         
         // Apply changes to template
         if let newTitle = changes.title {
@@ -151,6 +304,37 @@ final class MoleculeService: ObservableObject {
         regenerateFutureInstances(for: template, startingFrom: instance.scheduledDate)
         
         try? modelContext.save()
+        
+        // Audit log
+        Task {
+            var fieldChanges: [FieldChange] = []
+            
+            // Title Check
+            if let newTitle = changes.title {
+                if let change = AuditLogger.fieldChange("title", old: oldTitle, new: newTitle) {
+                    fieldChanges.append(change)
+                }
+            }
+            
+            // Time Check
+            if let newTime = changes.scheduledTime {
+                let formatter = DateFormatter()
+                formatter.timeStyle = .short
+                let oldTimeStr = formatter.string(from: oldTime)
+                let newTimeStr = formatter.string(from: newTime)
+                if let change = AuditLogger.fieldChange("baseTime", old: oldTimeStr, new: newTimeStr) {
+                    fieldChanges.append(change)
+                }
+            }
+            
+            await AuditLogger.shared.logUpdate(
+                entityType: .moleculeTemplate,
+                entityId: template.id.uuidString,
+                entityName: template.title,
+                changes: fieldChanges,
+                additionalInfo: "Edit Scope: All Future Events"
+            )
+        }
     }
     
     /// Regenerates future instances for a template
@@ -210,7 +394,22 @@ final class MoleculeService: ObservableObject {
         switch scope {
         case .thisEventOnly:
             NotificationManager.shared.cancelNotification(for: instance)
+            
+            // Capture info
+            let id = instance.id.uuidString
+            let name = instance.displayTitle
+            
             modelContext.delete(instance)
+            
+            // Audit log
+            Task {
+                await AuditLogger.shared.logDelete(
+                    entityType: .moleculeInstance,
+                    entityId: id,
+                    entityName: name,
+                    additionalInfo: "Deleted via 'This Event Only' scope"
+                )
+            }
             
         case .allFutureEvents:
             let futureInstances = template.instances.filter { $0.scheduledDate >= instance.scheduledDate }
@@ -225,7 +424,22 @@ final class MoleculeService: ObservableObject {
         case .allEvents:
             // Delete the template (cascade will delete all instances)
             NotificationManager.shared.cancelNotifications(for: template)
+            
+            // Capture info before delete
+            let templateId = template.id.uuidString
+            let templateName = template.title
+            
             modelContext.delete(template)
+            
+            // Audit log
+            Task {
+                await AuditLogger.shared.logDelete(
+                    entityType: .moleculeTemplate,
+                    entityId: templateId,
+                    entityName: templateName,
+                    additionalInfo: "Deleted via 'All Events' scope"
+                )
+            }
         }
         
         try? modelContext.save()
@@ -247,9 +461,23 @@ final class MoleculeService: ObservableObject {
         let descriptor = FetchDescriptor<AtomTemplate>(predicate: #Predicate { $0.id == sourceId })
         if let atomTemplate = try? modelContext.fetch(descriptor).first {
             // Update the baseline for future instances
+            let oldTarget = atomTemplate.targetValue
             atomTemplate.targetValue = current
             try? modelContext.save()
             print("💪 Progressive Overload: Updated baseline to \(current) \(atomTemplate.unit ?? "")")
+            
+            // Audit log
+            Task {
+                await AuditLogger.shared.logUpdate(
+                    entityType: .atomTemplate,
+                    entityId: atomTemplate.id.uuidString,
+                    entityName: atomTemplate.title,
+                    changes: [
+                        AuditLogger.fieldChange("targetValue", old: "\(oldTarget ?? 0)", new: "\(current)")
+                    ].compactMap { $0 },
+                    additionalInfo: "Progressive Overload Triggered"
+                )
+            }
         }
     }
 }
