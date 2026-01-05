@@ -61,6 +61,10 @@ final class MoleculeTemplate {
     /// All-day molecules appear in a separate dock above the timeline
     var isAllDay: Bool = false
     
+    /// Whether this template is archived (soft deleted)
+    /// Archived templates are hidden from the list but preserved for history
+    var isArchived: Bool = false
+    
     // MARK: - Icon Properties
     
     /// Custom icon symbol (1-2 chars/emoji). Nil = use first letter of title
@@ -95,9 +99,9 @@ final class MoleculeTemplate {
     // MARK: - Relationships
     
     /// One-to-Many relationship with MoleculeInstance
-    /// When a template is deleted, instances are orphaned (history preserved)
-    /// Using .nullify instead of .cascade to preserve workout history
-    @Relationship(deleteRule: .nullify, inverse: \MoleculeInstance.parentTemplate)
+    /// When a template is deleted, all instances are deleted to prevent orphans
+    /// NOTE: Users should rely on Backups to preserve history if needed
+    @Relationship(deleteRule: .cascade, inverse: \MoleculeInstance.parentTemplate)
     var instances: [MoleculeInstance] = []
     
     /// One-to-Many relationship with AtomTemplate
@@ -224,16 +228,17 @@ final class MoleculeTemplate {
     
     // MARK: - Instance Generation
     
-    /// Generates instances for this template from today until a target date
+    /// Generates instances for this template from a start date until a target date
     /// Also clones all AtomTemplates into AtomInstances for each generated instance
     /// - Parameters:
+    ///   - start: The start date to generate instances from (default: Today)
     ///   - targetDate: The end date to generate instances until (inclusive)
     ///   - context: ModelContext for idempotency check (prevents duplicates)
     /// - Returns: Array of NEW MoleculeInstance objects (skips existing dates)
-    func generateInstances(until targetDate: Date, in context: ModelContext) -> [MoleculeInstance] {
+    func generateInstances(from start: Date = Date(), until targetDate: Date, in context: ModelContext) -> [MoleculeInstance] {
         var generatedInstances: [MoleculeInstance] = []
         let calendar = Calendar.current
-        var currentDate = calendar.startOfDay(for: Date())
+        var currentDate = calendar.startOfDay(for: start)
         let endDate = calendar.startOfDay(for: targetDate)
         
         // Sort atom templates by order for consistent cloning
@@ -243,6 +248,7 @@ final class MoleculeTemplate {
         let timeComponents = calendar.dateComponents([.hour, .minute], from: baseTime)
         
         // Get existing instance dates for this template to prevent duplicates
+        // Note: For large datasets, this might be slow, but for local usage it's fine
         let existingDates = Set(instances.map { calendar.startOfDay(for: $0.scheduledDate) })
         
         while currentDate <= endDate {

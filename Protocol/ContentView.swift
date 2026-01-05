@@ -9,6 +9,11 @@ import SwiftUI
 import SwiftData
 
 struct ContentView: View {
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var deepLinkManager: DeepLinkManager
+    
+    @State private var deepLinkedInstance: MoleculeInstance?
+    
     var body: some View {
         TabView {
             CalendarView()
@@ -31,6 +36,26 @@ struct ContentView: View {
                     Label("HQ", systemImage: "building.columns")
                 }
         }
+        .onChange(of: deepLinkManager.pendingInstanceId) { _, newId in
+            guard let instanceId = newId else { return }
+            
+            // Fetch the instance from the database
+            let descriptor = FetchDescriptor<MoleculeInstance>(
+                predicate: #Predicate<MoleculeInstance> { $0.id == instanceId }
+            )
+            
+            if let instance = try? modelContext.fetch(descriptor).first {
+                deepLinkedInstance = instance
+            }
+            
+            // Clear the pending navigation
+            deepLinkManager.clearPendingNavigation()
+        }
+        .sheet(item: $deepLinkedInstance) { instance in
+            NavigationStack {
+                MoleculeInstanceDetailView(instance: instance)
+            }
+        }
     }
 }
 
@@ -44,7 +69,7 @@ enum TemplateSortOption: String, CaseIterable {
 // MARK: - Template List View
 struct TemplateListView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var templates: [MoleculeTemplate]
+    @Query(filter: #Predicate<MoleculeTemplate> { !$0.isArchived }) private var templates: [MoleculeTemplate]
     
     @State private var selectedMoleculeIDs: Set<PersistentIdentifier> = []
     @State private var isSelecting = false
@@ -56,6 +81,14 @@ struct TemplateListView: View {
     @State private var showingDeleteConfirmation = false
     @State private var showingCustomDurationAlert = false
     @State private var customDurationInput: String = ""
+    @State private var templateToDelete: MoleculeTemplate?
+    
+    // Bulk Backfill State
+    @State private var showingBulkBackfillSheet = false
+    @State private var backfillStartDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    @State private var backfillEndDate = Date()
+    @State private var showingBulkBackfillSuccess = false
+    @State private var bulkBackfillMessage = ""
     
     // Sorted/organized templates
     private var sortedTemplates: [MoleculeTemplate] {
@@ -212,6 +245,11 @@ struct TemplateListView: View {
                     customDurationInput = ""
                     showingCustomDurationAlert = true
                 }
+                
+                Button("Time Machine (Backfill)...") {
+                    showingBulkBackfillSheet = true
+                }
+                
                 Button("Cancel", role: .cancel) { }
             } message: {
                 Text("Generate instances for \(selectedMoleculeIDs.count) selected molecule(s)")
@@ -233,6 +271,59 @@ struct TemplateListView: View {
                 }
             } message: {
                 Text("Enter the number of days to generate instances for.")
+            }
+            .alert(
+                "Delete '\(templateToDelete?.title ?? "")'?",
+                isPresented: Binding(
+                    get: { templateToDelete != nil },
+                    set: { if !$0 { templateToDelete = nil } }
+                )
+            ) {
+                Button("Cancel", role: .cancel) {
+                    templateToDelete = nil
+                }
+                Button("Delete", role: .destructive) {
+                    if let template = templateToDelete {
+                        deleteTemplate(template)
+                        templateToDelete = nil
+                    }
+                }
+            } message: {
+                Text("This will delete the molecule and all its future instances. This cannot be undone.")
+            }
+            // MARK: - Bulk Backfill Sheet
+            .sheet(isPresented: $showingBulkBackfillSheet) {
+                NavigationStack {
+                    Form {
+                        Section {
+                            DatePicker("Start Date", selection: $backfillStartDate, displayedComponents: .date)
+                            DatePicker("End Date", selection: $backfillEndDate, displayedComponents: .date)
+                        } footer: {
+                            Text("Instances will be generated for every day in this range that matches the schedule of the \(selectedMoleculeIDs.count) selected protocols.")
+                        }
+                        
+                        Section {
+                            Button("Generate Instances") {
+                                bulkBackfill(from: backfillStartDate, to: backfillEndDate)
+                            }
+                            .bold()
+                        }
+                    }
+                    .navigationTitle("Time Machine")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") {
+                                showingBulkBackfillSheet = false
+                            }
+                        }
+                    }
+                }
+                .presentationDetents([.medium])
+            }
+            .alert("Backfill Complete", isPresented: $showingBulkBackfillSuccess) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(bulkBackfillMessage)
             }
         }
     }
@@ -299,9 +390,9 @@ struct TemplateListView: View {
             .disabled(isSelecting)
         }
         .padding(.vertical, 4)
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
-                deleteTemplate(template)
+                templateToDelete = template
             } label: {
                 Label("Delete", systemImage: "trash")
             }
@@ -346,12 +437,33 @@ struct TemplateListView: View {
             )
             newTemplate.sortOrder = maxOrder + 1
             modelContext.insert(newTemplate)
+            
+            // Audit log
+            Task {
+                await AuditLogger.shared.logCreate(
+                    entityType: .moleculeTemplate,
+                    entityId: newTemplate.id.uuidString,
+                    entityName: newTemplate.title
+                )
+            }
         }
     }
     
     private func deleteTemplate(_ template: MoleculeTemplate) {
+        let templateName = template.title
+        let templateId = template.id.uuidString
+        
         withAnimation {
             modelContext.delete(template)
+        }
+        
+        // Audit log
+        Task {
+            await AuditLogger.shared.logDelete(
+                entityType: .moleculeTemplate,
+                entityId: templateId,
+                entityName: templateName
+            )
         }
     }
     
@@ -438,6 +550,31 @@ struct TemplateListView: View {
         withAnimation {
             selectedMoleculeIDs.removeAll()
             isSelecting = false
+        }
+    }
+    
+    private func bulkBackfill(from startDate: Date, to endDate: Date) {
+        let service = MoleculeService(modelContext: modelContext)
+        var totalGenerated = 0
+        
+        for id in selectedMoleculeIDs {
+            if let template = templates.first(where: { $0.persistentModelID == id }) {
+                let newInstances = service.backfillInstances(
+                    for: template,
+                    from: startDate,
+                    to: endDate
+                )
+                totalGenerated += newInstances.count
+            }
+        }
+        
+        bulkBackfillMessage = "Successfully generated \(totalGenerated) past instances."
+        showingBulkBackfillSuccess = true
+        showingBulkBackfillSheet = false
+        
+        withAnimation {
+             selectedMoleculeIDs.removeAll()
+             isSelecting = false
         }
     }
 }
@@ -974,6 +1111,17 @@ struct MoleculeInstanceDetailView: View {
     @State private var showingRescheduleSheet = false
     @State private var rescheduleDate: Date = Date()
     
+    // Backfill State
+    @State private var showingBackfillSheet = false
+    @State private var backfillStartDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    @State private var backfillEndDate = Date()
+    @State private var showingBackfillSuccess = false
+    @State private var backfilledCount = 0
+    
+    private var service: MoleculeService {
+        MoleculeService(modelContext: modelContext)
+    }
+    
     private var sortedAtoms: [AtomInstance] {
         instance.atomInstances.sorted { $0.order < $1.order }
     }
@@ -1047,6 +1195,17 @@ struct MoleculeInstanceDetailView: View {
                 }
             }
             
+            // Series Section
+            if let template = instance.parentTemplate {
+                Section("Series") {
+                    Button {
+                        showingBackfillSheet = true
+                    } label: {
+                        Label("Generate Past Instances", systemImage: "clock.arrow.circlepath")
+                    }
+                }
+            }
+            
             // Reschedule Section
             if !instance.isCompleted {
                 Section("Reschedule") {
@@ -1100,6 +1259,48 @@ struct MoleculeInstanceDetailView: View {
                 }
             }
             .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showingBackfillSheet) {
+            NavigationStack {
+                Form {
+                    Section {
+                        DatePicker("Start Date", selection: $backfillStartDate, displayedComponents: .date)
+                        DatePicker("End Date", selection: $backfillEndDate, displayedComponents: .date)
+                    } footer: {
+                        Text("Instances will be generated for every day in this range that matches the molecule's schedule.")
+                    }
+                    
+                    Section {
+                        Button("Generate Instances") {
+                            if let template = instance.parentTemplate {
+                                let newInstances = service.backfillInstances(
+                                    for: template,
+                                    from: backfillStartDate,
+                                    to: backfillEndDate
+                                )
+                                backfilledCount = newInstances.count
+                                showingBackfillSuccess = true
+                                showingBackfillSheet = false
+                            }
+                        }
+                        .bold()
+                    }
+                }
+                .navigationTitle("Time Machine")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            showingBackfillSheet = false
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
+        .alert("Backfill Complete", isPresented: $showingBackfillSuccess) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Successfully generated \(backfilledCount) past instances.")
         }
         .onChange(of: sortedAtoms.map(\.isCompleted)) { oldValue, newValue in
             // Detect TRANSITION from <100% to 100%

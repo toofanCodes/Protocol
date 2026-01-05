@@ -125,9 +125,21 @@ struct CalendarView: View {
     // MARK: - Delete Action
     
     private func deleteInstance(_ instance: MoleculeInstance) {
+        let instanceName = instance.displayTitle
+        let instanceId = instance.id.uuidString
+        
         NotificationManager.shared.cancelNotification(for: instance)
         modelContext.delete(instance)
         try? modelContext.save()
+        
+        // Audit log
+        Task {
+            await AuditLogger.shared.logDelete(
+                entityType: .moleculeInstance,
+                entityId: instanceId,
+                entityName: instanceName
+            )
+        }
     }
     
     private func requestDelete(_ instance: MoleculeInstance) {
@@ -1414,6 +1426,17 @@ struct NewHabitFromLongPressView: View {
         }
         
         try? modelContext.save()
+        
+        // Audit log
+        Task {
+            await AuditLogger.shared.logCreate(
+                entityType: .moleculeTemplate,
+                entityId: template.id.uuidString,
+                entityName: template.title,
+                additionalInfo: "Created from Calendar long-press. Generated \(instances.count) instances."
+            )
+        }
+        
         dismiss()
     }
 }

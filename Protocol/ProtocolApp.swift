@@ -63,6 +63,7 @@ struct ProtocolApp: App {
             .modelContainer(sharedModelContainer)
             .environmentObject(MoleculeService(modelContext: sharedModelContainer.mainContext))
             .environmentObject(celebrationState)
+            .environmentObject(DeepLinkManager.shared)
             .onChange(of: scenePhase) { oldPhase, newPhase in
                 handleScenePhaseChange(from: oldPhase, to: newPhase)
             }
@@ -109,6 +110,13 @@ struct ProtocolApp: App {
                 }
             }
         }
+        
+        // Handle notification tap - deep link to instance
+        notificationHandler.onTap = { instanceId in
+            Task { @MainActor in
+                DeepLinkManager.shared.navigateToInstance(instanceId)
+            }
+        }
     }
     
     private func seedDataOnFirstLaunch() {
@@ -123,6 +131,7 @@ struct ProtocolApp: App {
             // Refresh notifications when app becomes active
             Task {
                 await BackgroundScheduler.shared.refreshNotifications()
+                await BackupManager.shared.autoBackup(context: sharedModelContainer.mainContext)
             }
         case .background:
             // Schedule background refresh when entering background

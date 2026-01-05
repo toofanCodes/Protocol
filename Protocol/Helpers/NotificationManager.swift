@@ -321,6 +321,7 @@ class NotificationHandler: NSObject, UNUserNotificationCenterDelegate {
     
     var onComplete: ((UUID) -> Void)?
     var onSnooze: ((UUID) -> Void)?
+    var onTap: ((UUID) -> Void)?
     
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
@@ -343,8 +344,8 @@ class NotificationHandler: NSObject, UNUserNotificationCenterDelegate {
             onSnooze?(instanceId)
             
         case UNNotificationDefaultActionIdentifier:
-            // User tapped notification - app opens
-            break
+            // User tapped notification - deep link to instance
+            onTap?(instanceId)
             
         default:
             break
