@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftData
+import SwiftUI
 
 /// The "Rule" model - defines the repeating pattern for molecules.
 /// A MoleculeTemplate generates one or more MoleculeInstances based on its recurrence settings.
@@ -60,6 +61,37 @@ final class MoleculeTemplate {
     /// All-day molecules appear in a separate dock above the timeline
     var isAllDay: Bool = false
     
+    // MARK: - Icon Properties
+    
+    /// Custom icon symbol (1-2 chars/emoji). Nil = use first letter of title
+    var iconSymbol: String?
+    
+    /// Icon frame shape (stored as raw value for SwiftData compatibility)
+    var iconFrameRaw: String = "circle"
+    
+    /// Computed accessor for iconFrame enum (not persisted)
+    @Transient var iconFrame: IconFrameStyle {
+        get { IconFrameStyle(rawValue: iconFrameRaw) ?? .circle }
+        set { iconFrameRaw = newValue.rawValue }
+    }
+    
+    /// Theme color stored as hex string (e.g., "#007AFF")
+    var themeColorHex: String = "#007AFF"
+    
+    /// Computed accessor for theme color (not persisted)
+    @Transient var themeColor: Color {
+        get { Color(hex: themeColorHex) }
+        set { themeColorHex = newValue.toHex() }
+    }
+    
+    // MARK: - Organization Properties
+    
+    /// Whether this molecule is pinned to the top of the list (max 3 pinned)
+    var isPinned: Bool = false
+    
+    /// Manual sort order (lower = higher in list)
+    var sortOrder: Int = 0
+    
     // MARK: - Relationships
     
     /// One-to-Many relationship with MoleculeInstance
@@ -88,6 +120,8 @@ final class MoleculeTemplate {
         compound: String? = nil,
         alertOffsets: [Int] = [15],
         isAllDay: Bool = false,
+        iconSymbol: String? = nil,
+        iconFrame: IconFrameStyle = .circle,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -103,6 +137,8 @@ final class MoleculeTemplate {
         self.compound = compound
         self.alertOffsets = alertOffsets
         self.isAllDay = isAllDay
+        self.iconSymbol = iconSymbol
+        self.iconFrameRaw = iconFrame.rawValue
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
