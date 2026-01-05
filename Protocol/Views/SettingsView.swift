@@ -33,6 +33,20 @@ enum ReminderOffset: Int, CaseIterable, Identifiable {
     }
 }
 
+enum BackupFrequency: String, CaseIterable, Identifiable {
+    case daily = "Daily"
+    case weekly = "Weekly"
+    case manual = "Manual"
+    
+    var id: String { rawValue }
+
+}
+
+struct ShareItem: Identifiable {
+    let id = UUID()
+    let items: [Any]
+}
+
 // MARK: - Settings View
 
 struct SettingsView: View {
@@ -42,12 +56,31 @@ struct SettingsView: View {
     // User Preferences
     @AppStorage("defaultReminderOffset") private var defaultReminderOffset: Int = 15
     @AppStorage("showAppIconBadge") private var showAppIconBadge: Bool = true
+    @AppStorage("backupFrequency") private var backupFrequency: BackupFrequency = .daily
     
     // Alert States
-    @State private var showingResyncAlert = false
+    @State private var showingResyncConfirmation = false
+    @State private var showingResyncSuccess = false
+    
+    @State private var showingBackupConfirmation = false
+    @State private var showingBackupSuccess = false
+    
+    @State private var showingSeedConfirmation = false
+    @State private var showingSeedSuccess = false
+    
     @State private var showingNukeConfirmation = false
-    @State private var showingExportSheet = false
-    @State private var exportData: Data?
+    @State private var showingNukeSuccess = false
+    
+    @State private var showingRestoreConfirmation = false
+    @State private var showingRestoreSuccess = false
+    
+    @State private var shareItem: ShareItem?
+    
+    // Backup State
+    @StateObject private var backupManager = BackupManager.shared
+    @State private var availableBackups: [URL] = []
+    @State private var isBackingUp = false
+    @State private var backupToRestore: URL?
     
     var body: some View {
         NavigationStack {
@@ -90,7 +123,7 @@ struct SettingsView: View {
                     
                     // Re-sync Alerts
                     Button {
-                        resyncAlerts()
+                        showingResyncConfirmation = true
                     } label: {
                         Label("Re-sync Alerts", systemImage: "arrow.triangle.2.circlepath")
                     }
@@ -177,17 +210,73 @@ struct SettingsView: View {
                     Label("Resources", systemImage: "folder")
                 }
                 
-                // MARK: - Section 3: Data Management
+                // MARK: - Section 3: Backups
                 Section {
                     Button {
-                        exportAllData()
+                        showingBackupConfirmation = true
                     } label: {
-                        Label("Export Data", systemImage: "square.and.arrow.up")
+                        HStack {
+                            Label("Create Backup", systemImage: "arrow.down.doc")
+                            Spacer()
+                            if isBackingUp {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(isBackingUp)
+                    
+                    Picker("Auto-Backup Frequency", selection: $backupFrequency) {
+                        ForEach(BackupFrequency.allCases) { freq in
+                            Text(freq.rawValue).tag(freq)
+                        }
+                    }
+                    
+                    if !availableBackups.isEmpty {
+                        ForEach(availableBackups, id: \.self) { url in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(url.lastPathComponent.replacingOccurrences(of: "backup_", with: "").replacingOccurrences(of: ".json", with: ""))
+                                        .font(.caption)
+                                    Text(getFileSize(url: url))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                
+                                Spacer()
+                                
+                                Button("Restore") {
+                                    backupToRestore = url
+                                    showingRestoreConfirmation = true
+                                }
+                                .font(.caption)
+                                .buttonStyle(.bordered)
+                                .tint(.orange)
+                                
+                                Button {
+                                    shareItem = ShareItem(items: [url])
+                                } label: {
+                                    Image(systemName: "square.and.arrow.up")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                        .onDelete(perform: deleteBackups)
+                    } else {
+                        Text("No backups found")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 } header: {
-                    Label("Data Management", systemImage: "externaldrive")
+                    HStack {
+                        Label("Backups", systemImage: "externaldrive")
+                        if backupManager.isCloudEnabled {
+                            Image(systemName: "icloud.fill")
+                                .foregroundStyle(.blue)
+                                .font(.caption)
+                        }
+                    }
                 } footer: {
-                    Text("Export all your molecules and instances as JSON.")
+                    Text(backupManager.isCloudEnabled ? "Backups are automatically saved to your iCloud Drive (Documents)." : "Backups are saved locally. Enable iCloud Drive for off-site protection.")
                 }
                 
                 // MARK: - Section 4: Support
@@ -212,14 +301,33 @@ struct SettingsView: View {
                     } label: {
                         Label("Blueprint Architect", systemImage: "doc.text")
                     }
+                    
+                    NavigationLink {
+                        AuditLogViewer()
+                    } label: {
+                        Label("Audit Log", systemImage: "doc.text.magnifyingglass")
+                    }
+                    
+                    Button {
+                        showingSeedConfirmation = true
+                    } label: {
+                        Label("Restore Default Protocols", systemImage: "arrow.counterclockwise.circle")
+                    }
                 } header: {
                     Label("Architect Tools", systemImage: "hammer")
                 } footer: {
-                    Text("Import habits in bulk via CSV files.")
+                    Text("Import habits in bulk or view data operation logs.")
                 }
                 
                 // MARK: - Section 6: Danger Zone
                 Section {
+                    NavigationLink {
+                        OrphanManagerView()
+                    } label: {
+                        Label("Lost & Found (Recovery)", systemImage: "lifepreserver")
+                            .foregroundStyle(.orange)
+                    }
+                    
                     Button(role: .destructive) {
                         showingNukeConfirmation = true
                     } label: {
@@ -234,7 +342,7 @@ struct SettingsView: View {
                             .foregroundStyle(.red)
                     }
                 } footer: {
-                    Text("This will permanently delete ALL your data. This action cannot be undone.")
+                    Text("Cleanup removes 'Untitled' orphan instances. Nuke permanently deletes ALL data.")
                         .foregroundStyle(.red.opacity(0.8))
                 }
             }
@@ -243,25 +351,91 @@ struct SettingsView: View {
             .onAppear {
                 Task {
                     await notificationManager.checkAuthorization()
+                    loadBackups() // Load backups when view appears
                 }
             }
-            .alert("Alerts Synced", isPresented: $showingResyncAlert) {
+            
+            // MARK: - Alerts
+            
+            // Re-sync Alerts
+            .alert("Resync Alerts?", isPresented: $showingResyncConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Resync", role: .none) {
+                    resyncAlerts()
+                }
+            } message: {
+                Text("This will refresh all pending notifications based on your current schedule. Are you sure?")
+            }
+            .alert("Success", isPresented: $showingResyncSuccess) {
                 Button("OK", role: .cancel) { }
             } message: {
-                Text("All upcoming notifications have been refreshed.")
+                Text("All alerts have been successfully resynchronized.")
             }
-            .alert("Delete All Data?", isPresented: $showingNukeConfirmation) {
+
+            // Create Backup
+            .alert("Create Backup?", isPresented: $showingBackupConfirmation) {
                 Button("Cancel", role: .cancel) { }
-                Button("Delete Everything", role: .destructive) {
+                Button("Create", role: .none) {
+                    createBackup()
+                }
+            } message: {
+                Text("This will save a snapshot of your current data. Do you want to proceed?")
+            }
+            .alert("Backup Created", isPresented: $showingBackupSuccess) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Your data has been successfully backed up.")
+            }
+
+            // Restore Defaults
+            .alert("Restore Protocols?", isPresented: $showingSeedConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Restore", role: .none) {
+                    seedDefaultProtocols()
+                }
+            } message: {
+                Text("This will add the default set of example habits to your library. It won't delete existing data.")
+            }
+            .alert("Protocols Restored", isPresented: $showingSeedSuccess) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Default protocols have been added to your library.")
+            }
+
+            // Restore Backup
+            .alert("Restore Backup?", isPresented: $showingRestoreConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Restore", role: .destructive) {
+                    if let url = backupToRestore {
+                        restoreBackup(url)
+                    }
+                }
+            } message: {
+                Text("This will REPLACE ALL current data with the backup. This action cannot be undone. Are you sure?")
+            }
+            .alert("Restore Complete", isPresented: $showingRestoreSuccess) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Your data has been restored from the backup.")
+            }
+
+            // Nuke Data
+            .alert("Nuke All Data?", isPresented: $showingNukeConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Nuke Everything", role: .destructive) {
                     nukeAllData()
                 }
             } message: {
-                Text("This will permanently delete all your molecules, instances, and settings. This action cannot be undone.")
+                Text("WARNING: This will permanently delete ALL molecules, history, and settings. This cannot be undone.")
             }
-            .sheet(isPresented: $showingExportSheet) {
-                if let data = exportData {
-                    ShareSheet(activityItems: [data])
-                }
+            .alert("Data Nuked", isPresented: $showingNukeSuccess) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("All data has been erased. You have a clean slate.")
+            }
+            
+            .sheet(item: $shareItem) { item in
+                ShareSheet(activityItems: item.items)
             }
         }
     }
@@ -282,7 +456,7 @@ struct SettingsView: View {
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
             
-            showingResyncAlert = true
+            showingResyncSuccess = true
         }
     }
     
@@ -322,8 +496,8 @@ struct SettingsView: View {
             ]
             
             let jsonData = try JSONSerialization.data(withJSONObject: exportDict, options: .prettyPrinted)
-            exportData = jsonData
-            showingExportSheet = true
+
+            shareItem = ShareItem(items: [jsonData])
             
         } catch {
             print("❌ Export failed: \(error)")
@@ -339,6 +513,78 @@ struct SettingsView: View {
             UIApplication.shared.open(url)
         }
     }
+    
+    private func seedDefaultProtocols() {
+        let manager = OnboardingManager(modelContext: modelContext)
+        manager.forceSeedData()
+        
+        // Audit log
+        Task {
+            await AuditLogger.shared.logBulkCreate(
+                entityType: .moleculeTemplate,
+                count: 5, // Approx count
+                additionalInfo: "User triggered Restore Default Protocols"
+            )
+            
+            showingSeedSuccess = true
+        }
+    }
+    
+    // MARK: - Backup Operations
+    
+    private func loadBackups() {
+        availableBackups = backupManager.listBackups()
+    }
+    
+    private func createBackup() {
+        Task {
+            isBackingUp = true
+            do {
+                _ = try await backupManager.createBackup(context: modelContext)
+                loadBackups()
+                showingBackupSuccess = true
+            } catch {
+                print("Backup failed: \(error)")
+            }
+            isBackingUp = false
+        }
+    }
+    
+    private func deleteBackups(at offsets: IndexSet) {
+        let urls = offsets.map { availableBackups[$0] }
+        for url in urls {
+            try? FileManager.default.removeItem(at: url)
+        }
+        loadBackups()
+    }
+    
+    private func restoreBackup(_ url: URL) {
+        Task {
+            do {
+                try await backupManager.restore(from: url, context: modelContext)
+                
+                // Audit log
+                await AuditLogger.shared.logBulkCreate(
+                    entityType: .moleculeTemplate,
+                    count: 1, // Summary count
+                    additionalInfo: "Restored from backup: \(url.lastPathComponent)"
+                )
+                
+                showingRestoreSuccess = true
+                
+            } catch {
+                print("Restore failed: \(error)")
+            }
+        }
+    }
+    
+    private func getFileSize(url: URL) -> String {
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+    }
+    
+    // Export function replaced by BackupManager
+    // private func exportAllData() { ... }
     
     private func nukeAllData() {
         do {
@@ -369,6 +615,8 @@ struct SettingsView: View {
             // Haptic feedback
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
+            
+            showingNukeSuccess = true
             
         } catch {
             print("❌ Failed to nuke data: \(error)")
