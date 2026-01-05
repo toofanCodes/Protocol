@@ -19,8 +19,17 @@ class DataController {
     let container: ModelContainer
     
     init() {
-        // Use the versioned schema from our migration plan
-        let schema = Schema(versionedSchema: SchemaV1.self)
+        // Use simple schema without VersionedSchema for lightweight migration
+        // New properties (iconSymbol: String?, iconFrameRaw: String = "circle") 
+        // are lightweight-migration compatible
+        let schema = Schema([
+            MoleculeTemplate.self,
+            MoleculeInstance.self,
+            AtomTemplate.self,
+            AtomInstance.self,
+            WorkoutSet.self,
+            UserSettings.self
+        ])
         
         var modelConfiguration: ModelConfiguration
         var sqliteURL: URL?
@@ -51,11 +60,10 @@ class DataController {
             )
         }
         
-        // 3. Create Container with Migration Plan
+        // 3. Create Container (lightweight migration happens automatically)
         do {
             container = try ModelContainer(
                 for: schema,
-                migrationPlan: AppMigrationPlan.self,
                 configurations: [modelConfiguration]
             )
             

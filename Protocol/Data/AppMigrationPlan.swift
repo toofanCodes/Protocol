@@ -13,7 +13,7 @@ import Foundation
 
 // MARK: - Schema Version 1
 
-/// The initial (and current) schema version.
+/// The initial schema version.
 /// Lists all persistent model types in the app.
 enum SchemaV1: VersionedSchema {
     static var versionIdentifier = Schema.Version(1, 0, 0)
@@ -30,20 +30,45 @@ enum SchemaV1: VersionedSchema {
     }
 }
 
+// MARK: - Schema Version 2
+
+/// Schema version 2.0.0 - Adds icon customization properties.
+/// New properties:
+/// - MoleculeTemplate: iconSymbol (String?), iconFrameRaw (String)
+/// - AtomTemplate: iconSymbol (String?), iconFrameRaw (String)
+enum SchemaV2: VersionedSchema {
+    static var versionIdentifier = Schema.Version(2, 0, 0)
+    
+    static var models: [any PersistentModel.Type] {
+        [
+            MoleculeTemplate.self,
+            MoleculeInstance.self,
+            AtomTemplate.self,
+            AtomInstance.self,
+            WorkoutSet.self,
+            UserSettings.self
+        ]
+    }
+}
+
 // MARK: - Migration Plan
 
 /// The app's migration plan.
-/// Currently defines only SchemaV1. When adding new properties or models,
-/// create SchemaV2, add a migration stage, and update this plan.
+/// Defines schema versions and migration stages.
 enum AppMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [SchemaV1.self]
+        [SchemaV1.self, SchemaV2.self]
     }
     
-    /// Migration stages. Empty for now since we only have one version.
-    /// When adding SchemaV2, add a stage like:
-    /// `static let migrateV1toV2 = MigrationStage.lightweight(fromVersion: SchemaV1.self, toVersion: SchemaV2.self)`
+    /// Lightweight migration from V1 to V2.
+    /// New properties have defaults (iconSymbol: nil, iconFrameRaw: "circle")
+    /// so lightweight migration is sufficient.
     static var stages: [MigrationStage] {
-        []
+        [migrateV1toV2]
     }
+    
+    static let migrateV1toV2 = MigrationStage.lightweight(
+        fromVersion: SchemaV1.self,
+        toVersion: SchemaV2.self
+    )
 }
