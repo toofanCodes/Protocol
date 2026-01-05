@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftData
+import SwiftUI
 
 /// The "Blueprint" model for Atoms - defines the default task structure.
 /// When a MoleculeInstance is created, AtomTemplates are cloned into AtomInstances.
@@ -51,6 +52,29 @@ final class AtomTemplate {
     /// Creation timestamp
     var createdAt: Date
     
+    // MARK: - Icon Properties
+    
+    /// Custom icon symbol (1-2 chars/emoji). Nil = use first letter of title
+    var iconSymbol: String?
+    
+    /// Icon frame shape (stored as raw value for SwiftData compatibility)
+    var iconFrameRaw: String = "circle"
+    
+    /// Computed accessor for iconFrame enum (not persisted)
+    @Transient var iconFrame: IconFrameStyle {
+        get { IconFrameStyle(rawValue: iconFrameRaw) ?? .circle }
+        set { iconFrameRaw = newValue.rawValue }
+    }
+    
+    /// Theme color stored as hex string (e.g., "#007AFF")
+    var themeColorHex: String = "#007AFF"
+    
+    /// Computed accessor for theme color (not persisted)
+    @Transient var themeColor: Color {
+        get { Color(hex: themeColorHex) }
+        set { themeColorHex = newValue.toHex() }
+    }
+    
     // MARK: - Relationships
     
     /// Belongs to one MoleculeTemplate
@@ -70,7 +94,9 @@ final class AtomTemplate {
         defaultRestTime: TimeInterval? = nil,
         videoURL: String? = nil,
         parentMoleculeTemplate: MoleculeTemplate? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        iconSymbol: String? = nil,
+        iconFrame: IconFrameStyle = .circle
     ) {
         self.id = id
         self.title = title
@@ -84,6 +110,8 @@ final class AtomTemplate {
         self.videoURL = videoURL
         self.parentMoleculeTemplate = parentMoleculeTemplate
         self.createdAt = createdAt
+        self.iconSymbol = iconSymbol
+        self.iconFrameRaw = iconFrame.rawValue
     }
     
     // MARK: - Computed Properties

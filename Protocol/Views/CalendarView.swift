@@ -8,6 +8,24 @@
 import SwiftUI
 import SwiftData
 
+// MARK: - Helper Functions
+
+/// Fetches all MoleculeInstances scheduled for today
+fileprivate func fetchTodayInstances(modelContext: ModelContext) -> [MoleculeInstance] {
+    let calendar = Calendar.current
+    let startOfDay = calendar.startOfDay(for: Date())
+    let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+    
+    let descriptor = FetchDescriptor<MoleculeInstance>(
+        predicate: #Predicate<MoleculeInstance> { instance in
+            instance.scheduledDate >= startOfDay && instance.scheduledDate < endOfDay
+        }
+    )
+    
+    return (try? modelContext.fetch(descriptor)) ?? []
+}
+
+// MARK: - CalendarView
 /// The Main Calendar Hub Interface
 struct CalendarView: View {
     @StateObject private var viewModel = CalendarViewModel()
@@ -16,6 +34,7 @@ struct CalendarView: View {
     
     // For manual drag operations in DayView
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var celebrationState: CelebrationState
     @State private var draggingInstance: MoleculeInstance?
     @State private var dragOffset: CGSize = .zero
     @State private var instanceToDelete: MoleculeInstance?
@@ -69,9 +88,6 @@ struct CalendarView: View {
                         allInstances: allInstances
                     )
                     .tag(CalendarViewMode.month)
-                    
-                    MoleculeListView(viewModel: viewModel)
-                        .tag(CalendarViewMode.list)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 // Disable swipe to avoid conflict with drag or Calendar nav? 
@@ -123,6 +139,15 @@ struct CalendarView: View {
         instance.toggleComplete()
         if instance.isCompleted {
             NotificationManager.shared.cancelNotification(for: instance)
+            
+            // Delayed celebration like sheet flow (0.5s)
+            celebrationState.triggerMoleculeCompletion(themeColor: instance.parentTemplate?.themeColor, delay: 0.5)
+            
+            // Check for Perfect Day after a delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                let todayInstances = fetchTodayInstances(modelContext: modelContext)
+                celebrationState.checkPerfectDay(todayInstances: todayInstances, delay: 0)
+            }
         } else {
             Task {
                 await NotificationManager.shared.scheduleNotifications(for: instance)
@@ -327,11 +352,19 @@ struct DayView: View {
     @Binding var dragOffset: CGSize
     let onDrop: (MoleculeInstance, CGSize) -> Void
     let onLongPress: (Date) -> Void
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var celebrationState: CelebrationState
     
     // Constants
     private let hourHeight: CGFloat = 80
     private let startHour: Int = 0
     private let endHour: Int = 23
+    private let maxVisiblePerHour: Int = 2
+    
+    // State for overflow sheet
+    @State private var showingOverflowSheet = false
+    @State private var overflowInstances: [MoleculeInstance] = []
+    @State private var overflowHourLabel: String = ""
     
     // MARK: - Computed Properties
     
@@ -357,6 +390,28 @@ struct DayView: View {
     /// Timed instances (non all-day)
     private var timedInstances: [MoleculeInstance] {
         instances.filter { !$0.isAllDay }
+    }
+    
+    /// Group timed instances by hour for overflow handling
+    private var instancesByHour: [Int: [MoleculeInstance]] {
+        Dictionary(grouping: timedInstances) { instance in
+            Calendar.current.component(.hour, from: instance.effectiveTime)
+        }
+    }
+    
+    /// Visible instances (max 2 per hour)
+    private var visibleInstances: [MoleculeInstance] {
+        var result: [MoleculeInstance] = []
+        for (_, hourInstances) in instancesByHour {
+            let sorted = hourInstances.sorted { $0.effectiveTime < $1.effectiveTime }
+            result.append(contentsOf: sorted.prefix(maxVisiblePerHour))
+        }
+        return result
+    }
+    
+    /// Hours that have overflow (more than maxVisiblePerHour)
+    private var overflowHours: [Int] {
+        instancesByHour.filter { $0.value.count > maxVisiblePerHour }.keys.sorted()
     }
     
     var body: some View {
@@ -411,8 +466,8 @@ struct DayView: View {
                             .offset(y: currentTimeYPosition)
                     }
                     
-                    // Only show timed instances in timeline
-                    ForEach(timedInstances) { instance in
+                    // Only show visible instances (max 2 per hour)
+                    ForEach(visibleInstances) { instance in
                         DraggableMoleculeBlock(
                             instance: instance,
                             position: calculatePosition(for: instance),
@@ -433,12 +488,38 @@ struct DayView: View {
                                 instance.toggleComplete()
                                 if instance.isCompleted {
                                     NotificationManager.shared.cancelNotification(for: instance)
+                                    
+                                    // Delayed celebration like sheet flow (0.5s)
+                                    celebrationState.triggerMoleculeCompletion(themeColor: instance.parentTemplate?.themeColor, delay: 0.5)
+                                    
+                                    // Check Perfect Day
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                        let todayInstances = fetchTodayInstances(modelContext: modelContext)
+                                        celebrationState.checkPerfectDay(todayInstances: todayInstances, delay: 0)
+                                    }
                                 }
                             },
                             onDelete: {
                                 NotificationManager.shared.cancelNotification(for: instance)
                             }
                         )
+                    }
+                    
+                    // Overflow pills for hours with >2 events
+                    ForEach(overflowHours, id: \.self) { hour in
+                        if let hourInstances = instancesByHour[hour] {
+                            let overflowCount = hourInstances.count - maxVisiblePerHour
+                            OverflowPill(
+                                count: overflowCount,
+                                hour: hour,
+                                hourHeight: hourHeight,
+                                onTap: {
+                                    overflowInstances = hourInstances.sorted { $0.effectiveTime < $1.effectiveTime }
+                                    overflowHourLabel = formatHour(hour)
+                                    showingOverflowSheet = true
+                                }
+                            )
+                        }
                     }
                 }
                 .padding(.bottom, 50)
@@ -472,6 +553,17 @@ struct DayView: View {
             .onChange(of: viewModel.currentDate) { _, _ in
                 scrollToNow(proxy: proxy)
             }
+        }
+        .sheet(isPresented: $showingOverflowSheet) {
+            OverflowSheet(
+                instances: overflowInstances,
+                hourLabel: overflowHourLabel,
+                onSelectInstance: { instance in
+                    showingOverflowSheet = false
+                    viewModel.selectedInstance = instance
+                }
+            )
+            .presentationDetents([.medium])
         }
     }
     
@@ -553,6 +645,84 @@ struct NowIndicatorLine: View {
         .padding(.leading, 42)
     }
 }
+// MARK: - Overflow Components
+
+/// A pill showing "+N more" for overflow molecules in a time slot
+struct OverflowPill: View {
+    let count: Int
+    let hour: Int
+    let hourHeight: CGFloat
+    let onTap: () -> Void
+    
+    private var yPosition: CGFloat {
+        // Position at the bottom of the hour slot (after the 2 visible blocks)
+        CGFloat(hour) * hourHeight + 60
+    }
+    
+    var body: some View {
+        Button(action: onTap) {
+            Text("+\(count) more")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.8))
+                )
+        }
+        .buttonStyle(.plain)
+        .position(x: UIScreen.main.bounds.width / 2 + 20, y: yPosition + 20)
+    }
+}
+
+/// Sheet to display all molecules for an overflowed hour
+struct OverflowSheet: View {
+    let instances: [MoleculeInstance]
+    let hourLabel: String
+    let onSelectInstance: (MoleculeInstance) -> Void
+    
+    var body: some View {
+        NavigationStack {
+            List(instances) { instance in
+                HStack(spacing: 12) {
+                    // Color indicator
+                    Circle()
+                        .fill(instance.parentTemplate?.themeColor ?? .accentColor)
+                        .frame(width: 10, height: 10)
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(instance.displayTitle)
+                            .font(.body)
+                            .fontWeight(.medium)
+                        
+                        Text(instance.formattedTime)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    if instance.isCompleted {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    }
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    onSelectInstance(instance)
+                }
+            }
+            .navigationTitle("Events at \(hourLabel)")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
 
 // MARK: - All-Day Components
 
@@ -561,6 +731,7 @@ struct AllDayDockView: View {
     let instances: [MoleculeInstance]
     @ObservedObject var viewModel: CalendarViewModel
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var celebrationState: CelebrationState
     
     var body: some View {
         ScrollView {
@@ -589,6 +760,15 @@ struct AllDayDockView: View {
                                 instance.toggleComplete()
                                 if instance.isCompleted {
                                     NotificationManager.shared.cancelNotification(for: instance)
+                                    
+                                    // Trigger celebration with delay
+                                    celebrationState.triggerMoleculeCompletion(themeColor: instance.parentTemplate?.themeColor, delay: 0.5)
+                                    
+                                    // Check Perfect Day
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                        let todayInstances = fetchTodayInstances(modelContext: modelContext)
+                                        celebrationState.checkPerfectDay(todayInstances: todayInstances, delay: 0)
+                                    }
                                 }
                                 try? modelContext.save()
                             } label: {
@@ -626,12 +806,23 @@ struct AllDayDockView: View {
 struct AllDayBanner: View {
     let instance: MoleculeInstance
     
+    private var themeColor: Color {
+        instance.parentTemplate?.themeColor ?? .accentColor
+    }
+    
     var body: some View {
         HStack(spacing: 10) {
-            // Status indicator
-            Circle()
-                .fill(instance.isCompleted ? Color.green : Color.accentColor)
-                .frame(width: 8, height: 8)
+            // Avatar (24x24 for compact all-day banner)
+            if let template = instance.parentTemplate {
+                AvatarView(
+                    molecule: template,
+                    size: 24
+                )
+            } else {
+                Circle()
+                    .fill(instance.isCompleted ? Color.green : themeColor)
+                    .frame(width: 24, height: 24)
+            }
             
             // Title
             Text(instance.displayTitle)
@@ -639,6 +830,7 @@ struct AllDayBanner: View {
                 .fontWeight(.medium)
                 .strikethrough(instance.isCompleted)
                 .foregroundStyle(instance.isCompleted ? .secondary : .primary)
+                .lineLimit(1)
             
             Spacer()
             
@@ -661,33 +853,57 @@ struct MonthView: View {
     @ObservedObject var viewModel: CalendarViewModel
     let allInstances: [MoleculeInstance]
     
-    private let columns = Array(repeating: GridItem(.flexible()), count: 7)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 7)
+    
+    // Popover state
+    @State private var selectedDate: Date? = nil
+    @State private var selectedInstances: [MoleculeInstance] = []
     
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 10) {
+        GeometryReader { geometry in
+            let gridDays = viewModel.currentDate.calendarGridDays
+            let numberOfRows = (gridDays.count / 7) + 1 // +1 for header row
+            let availableHeight = geometry.size.height - 16 // Padding
+            let rowHeight = availableHeight / CGFloat(numberOfRows)
+            
+            LazyVGrid(columns: columns, spacing: 2) {
                 // Days of week header
                 ForEach(Calendar.current.shortWeekdaySymbols, id: \.self) { day in
                     Text(day)
                         .font(.caption2)
                         .fontWeight(.bold)
                         .foregroundStyle(.secondary)
+                        .frame(height: 20)
                 }
                 
                 // Days grid
-                ForEach(viewModel.currentDate.calendarGridDays, id: \.self) { date in
+                ForEach(gridDays, id: \.self) { date in
                     MonthDayCell(
                         date: date,
                         isCurrentMonth: Calendar.current.isDate(date, equalTo: viewModel.currentDate, toGranularity: .month),
                         instances: instancesFor(date: date)
                     )
+                    .frame(height: rowHeight - 4)
                     .onTapGesture {
-                        viewModel.currentDate = date
-                        viewModel.viewMode = .day
+                        selectedDate = date
+                        selectedInstances = instancesFor(date: date)
                     }
                 }
             }
-            .padding()
+            .padding(.horizontal, 4)
+            .padding(.vertical, 8)
+        }
+        .sheet(item: Binding(
+            get: { selectedDate.map { SelectedDateWrapper(date: $0) } },
+            set: { selectedDate = $0?.date }
+        )) { wrapper in
+            DayDetailPopover(
+                date: wrapper.date,
+                instances: selectedInstances,
+                viewModel: viewModel
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
     }
     
@@ -695,7 +911,14 @@ struct MonthView: View {
         allInstances.filter {
             Calendar.current.isDate($0.scheduledDate, inSameDayAs: date) && viewModel.matchesFilter($0)
         }
+        .sorted { $0.scheduledDate < $1.scheduledDate }
     }
+}
+
+// Wrapper for sheet binding
+private struct SelectedDateWrapper: Identifiable {
+    let date: Date
+    var id: Date { date }
 }
 
 struct MonthDayCell: View {
@@ -703,33 +926,239 @@ struct MonthDayCell: View {
     let isCurrentMonth: Bool
     let instances: [MoleculeInstance]
     
+    private let shapeSize: CGFloat = 10
+    
     var body: some View {
         VStack(spacing: 4) {
+            // Day number
             Text(date.formatted(.dateTime.day()))
-                .font(.callout)
+                .font(.subheadline)
+                .fontWeight(.medium)
                 .foregroundStyle(isCurrentMonth ? .primary : .secondary)
-                .frame(width: 30, height: 30)
+                .frame(width: 28, height: 28)
                 .background(
                     Calendar.current.isDateInToday(date) ? Circle().fill(Color.red) : nil
                 )
                 .foregroundStyle(Calendar.current.isDateInToday(date) ? .white : (isCurrentMonth ? .primary : .secondary))
             
-            HStack(spacing: 3) {
-                ForEach(instances.prefix(4)) { instance in
-                    Circle()
-                        .fill(colorFor(instance))
-                        .frame(width: 5, height: 5)
-                }
+            // Single row of overlapping shapes (max 4 slots)
+            if !instances.isEmpty {
+                shapeRow
             }
+            
+            Spacer(minLength: 0)
         }
-        .frame(height: 50)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(uiColor: .systemBackground))
+        .contentShape(Rectangle())
     }
     
-    private func colorFor(_ instance: MoleculeInstance) -> Color {
+    // MARK: - Shape Row
+    
+    private var shapeRow: some View {
+        // Logic: specific 4th slot reserved for +N if count > 3
+        let maxItemsBeforeOverflow = 3
+        let showOverflow = instances.count > maxItemsBeforeOverflow
+        let displayCount = showOverflow ? maxItemsBeforeOverflow : instances.count
+        let visibleInstances = Array(instances.prefix(displayCount))
+        
+        return HStack(spacing: -2) { // Negative spacing for overlap
+            ForEach(Array(visibleInstances.enumerated()), id: \.element.id) { index, instance in
+                shapeView(for: instance)
+                    .zIndex(Double(index)) // Later items on top (Right over Left)
+            }
+            
+            if showOverflow {
+                overflowBadge(count: instances.count - maxItemsBeforeOverflow)
+                    .zIndex(Double(visibleInstances.count)) // Badge on top of all
+            }
+        }
+    }
+    
+    private func shapeView(for instance: MoleculeInstance) -> some View {
+        let shape = instance.parentTemplate?.iconFrame ?? .circle
+        let color = statusColor(for: instance)
+        
+        return Group {
+            switch shape {
+            case .circle:
+                Circle()
+                    .fill(color)
+                    .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 1.5))
+            case .square:
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(color)
+                    .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color(uiColor: .systemBackground), lineWidth: 1.5))
+            case .star:
+                Image(systemName: "star.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(color)
+                    // Stars don't get a stroke overlay as easily in SwiftUI without advanced masking,
+                    // but we can add a small shadow or background for separation if needed.
+                    // For now, keeping simple as separation is less critical for stars vs blocks.
+            case .triangle:
+                Image(systemName: "triangle.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(color)
+            }
+        }
+        .frame(width: shapeSize, height: shapeSize)
+    }
+    
+    private func overflowBadge(count: Int) -> some View {
+        ZStack {
+            Circle()
+                .fill(Color(uiColor: .tertiarySystemFill))
+            Text("+\(count)")
+                .font(.system(size: 8, weight: .bold)) // Slightly larger text for readability
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: shapeSize + 2, height: shapeSize + 2) // Badge slightly larger
+        .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 1.5))
+    }
+    
+    private func statusColor(for instance: MoleculeInstance) -> Color {
         if instance.isCompleted { return .green }
         if instance.isPast { return .red }
         return .gray
+    }
+}
+
+// MARK: - Day Detail Popover
+
+struct DayDetailPopover: View {
+    let date: Date
+    let instances: [MoleculeInstance]
+    @ObservedObject var viewModel: CalendarViewModel
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var celebrationState: CelebrationState
+    
+    var body: some View {
+        NavigationStack {
+            Group {
+                if instances.isEmpty {
+                    ContentUnavailableView(
+                        "No Habits",
+                        systemImage: "calendar.badge.clock",
+                        description: Text("No habits scheduled for this day.")
+                    )
+                } else {
+                    List {
+                        ForEach(instances) { instance in
+                            DayPopoverRow(instance: instance)
+                                .onTapGesture {
+                                    dismiss()
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                        viewModel.selectedInstance = instance
+                                    }
+                                }
+                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                    Button {
+                                        instance.toggleComplete()
+                                        if instance.isCompleted {
+                                            NotificationManager.shared.cancelNotification(for: instance)
+                                            
+                                            // Dismiss popover so confetti is visible
+                                            dismiss()
+                                            
+                                            // Trigger effects after dismiss
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                                celebrationState.triggerMoleculeCompletion(themeColor: instance.parentTemplate?.themeColor)
+                                                
+                                                // Check Perfect Day
+                                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                                    let todayInstances = fetchTodayInstances(modelContext: modelContext)
+                                                    celebrationState.checkPerfectDay(todayInstances: todayInstances)
+                                                }
+                                            }
+                                        }
+                                        try? modelContext.save()
+                                    } label: {
+                                        Label(
+                                            instance.isCompleted ? "Undo" : "Done",
+                                            systemImage: instance.isCompleted ? "xmark.circle" : "checkmark.circle"
+                                        )
+                                    }
+                                    .tint(instance.isCompleted ? .orange : .green)
+                                }
+                        }
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .navigationTitle(date.formatted(.dateTime.month(.wide).day()))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Go to Day") {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            viewModel.currentDate = date
+                            viewModel.viewMode = .day
+                        }
+                    }
+                }
+                
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct DayPopoverRow: View {
+    let instance: MoleculeInstance
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            // Avatar (32x32)
+            if let template = instance.parentTemplate {
+                AvatarView(
+                    molecule: template,
+                    size: 32
+                )
+            } else {
+                Circle()
+                    .fill(.gray)
+                    .frame(width: 32, height: 32)
+            }
+            
+            // Content
+            VStack(alignment: .leading, spacing: 2) {
+                Text(instance.displayTitle)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .strikethrough(instance.isCompleted)
+                    .foregroundStyle(instance.isCompleted ? .secondary : .primary)
+                    .lineLimit(1)
+                
+                Text(timeString)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            
+            Spacer()
+            
+            // Status indicator
+            Image(systemName: instance.isCompleted ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(instance.isCompleted ? .green : .secondary)
+                .font(.title3)
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+    
+    private var timeString: String {
+        if instance.isAllDay {
+            return "All Day"
+        }
+        return instance.effectiveTime.formatted(date: .omitted, time: .shortened)
     }
 }
 
@@ -737,6 +1166,7 @@ struct WeekView: View {
     @ObservedObject var viewModel: CalendarViewModel
     let allInstances: [MoleculeInstance]
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var celebrationState: CelebrationState
     
     private var daysOfWeek: [Date] {
         let start = viewModel.currentDate.startOfWeek
@@ -768,6 +1198,13 @@ struct WeekView: View {
                                             instance.toggleComplete()
                                             if instance.isCompleted {
                                                 NotificationManager.shared.cancelNotification(for: instance)
+                                                celebrationState.triggerMoleculeCompletion(themeColor: instance.parentTemplate?.themeColor)
+                                                
+                                                // Check Perfect Day
+                                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                                    let todayInstances = fetchTodayInstances(modelContext: modelContext)
+                                                    celebrationState.checkPerfectDay(todayInstances: todayInstances)
+                                                }
                                             }
                                             try? modelContext.save()
                                         } label: {

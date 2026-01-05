@@ -100,6 +100,48 @@ struct SettingsView: View {
                     Text("The Command Center for all your alerts.")
                 }
                 
+                // MARK: - Section 1.5: Celebrations
+                Section {
+                    Toggle(isOn: Binding(
+                        get: { SoundManager.shared.isSoundEnabled },
+                        set: { SoundManager.shared.isSoundEnabled = $0 }
+                    )) {
+                        Label("Sound Effects", systemImage: "speaker.wave.2")
+                    }
+                    
+                    if SoundManager.shared.isSoundEnabled {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Volume")
+                                .font(.subheadline)
+                            HStack {
+                                Image(systemName: "speaker.fill")
+                                    .foregroundStyle(.secondary)
+                                Slider(
+                                    value: Binding(
+                                        get: { Double(SoundManager.shared.volume) },
+                                        set: { SoundManager.shared.volume = Float($0) }
+                                    ),
+                                    in: 0...1,
+                                    step: 0.1
+                                )
+                                Image(systemName: "speaker.wave.3.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    
+                    Toggle(isOn: Binding(
+                        get: { SoundManager.shared.isHapticEnabled },
+                        set: { SoundManager.shared.isHapticEnabled = $0 }
+                    )) {
+                        Label("Haptic Feedback", systemImage: "iphone.radiowaves.left.and.right")
+                    }
+                } header: {
+                    Label("Celebrations", systemImage: "party.popper")
+                } footer: {
+                    Text("Customize the fanfare when you complete habits.")
+                }
+                
                 // MARK: - Section 2: Resources
                 Section {
                     NavigationLink {

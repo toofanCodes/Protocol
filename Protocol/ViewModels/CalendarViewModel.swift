@@ -12,7 +12,6 @@ enum CalendarViewMode: String, CaseIterable, Identifiable {
     case day = "Day"
     case week = "Week"
     case month = "Month"
-    case list = "List"
     
     var id: String { rawValue }
 }
@@ -70,8 +69,6 @@ final class CalendarViewModel: ObservableObject {
         case .month:
             formatter.dateFormat = "MMMM yyyy"
             return formatter.string(from: currentDate)
-        case .list:
-            return "Upcoming"
         }
     }
     
@@ -92,8 +89,6 @@ final class CalendarViewModel: ObservableObject {
             if let newDate = calendar.date(byAdding: .month, value: value, to: currentDate) {
                 currentDate = newDate
             }
-        case .list:
-            break // List scrolls freely, buttons could jump to today or next batch
         }
     }
     

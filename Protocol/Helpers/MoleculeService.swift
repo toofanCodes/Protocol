@@ -158,11 +158,16 @@ final class MoleculeService: ObservableObject {
     ///   - template: The template to regenerate instances for
     ///   - startDate: The date to start regenerating from
     func regenerateFutureInstances(for template: MoleculeTemplate, startingFrom startDate: Date) {
+        // Ensure we start from today at minimum to avoid regenerating past instances
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let effectiveStartDate = max(calendar.startOfDay(for: startDate), today)
+        
         // Remove future uncompleted instances that are not exceptions
         let instancesToRemove = template.instances.filter { instance in
             !instance.isCompleted &&
             !instance.isException &&
-            instance.scheduledDate >= startDate
+            instance.scheduledDate >= effectiveStartDate
         }
         
         for instance in instancesToRemove {
@@ -170,7 +175,7 @@ final class MoleculeService: ObservableObject {
         }
         
         // Generate new instances (30 days by default)
-        let targetDate = Calendar.current.date(byAdding: .day, value: 30, to: startDate)!
+        let targetDate = Calendar.current.date(byAdding: .day, value: 30, to: effectiveStartDate)!
         let newInstances = template.generateInstances(until: targetDate, in: modelContext)
         for instance in newInstances {
             modelContext.insert(instance)

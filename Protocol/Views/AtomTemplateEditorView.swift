@@ -46,6 +46,12 @@ struct AtomTemplateEditorView: View {
     
     // Dialog state
     @State private var showingCascadeDialog = false
+    @State private var showingIconEditor = false
+    
+    // Icon state
+    @State private var iconSymbol: String = ""
+    @State private var iconFrame: IconFrameStyle = .circle
+    @State private var themeColor: Color = .blue
     
     // Query for future instances
     @Query private var allAtomInstances: [AtomInstance]
@@ -70,6 +76,30 @@ struct AtomTemplateEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
+                // Icon Section
+                Section {
+                    HStack {
+                        Spacer()
+                        Button {
+                            showingIconEditor = true
+                        } label: {
+                            AvatarView(
+                                text: iconSymbol,
+                                fallbackText: title.isEmpty ? "?" : title,
+                                shape: iconFrame,
+                                color: themeColor,
+                                size: 60
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                    }
+                    .listRowBackground(Color.clear)
+                } footer: {
+                    Text("Tap to customize icon")
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                
                 // Title Section
                 Section("Task Name") {
                     TextField("e.g., Drink Water", text: $title)
@@ -204,6 +234,14 @@ struct AtomTemplateEditorView: View {
                 Text("You've changed structural properties. Do you want to update all future scheduled instances of this task?")
             }
         }
+        .sheet(isPresented: $showingIconEditor) {
+            IconEditorSheet(
+                iconSymbol: $iconSymbol,
+                iconFrame: $iconFrame,
+                themeColor: $themeColor,
+                fallbackText: title.isEmpty ? "?" : title
+            )
+        }
     }
     
     // MARK: - Private Methods
@@ -243,6 +281,11 @@ struct AtomTemplateEditorView: View {
         originalTargetSets = targetSets
         originalTargetReps = targetReps
         originalRestTime = restTime
+        
+        // Load icon values
+        iconSymbol = atom.iconSymbol ?? ""
+        iconFrame = atom.iconFrame
+        themeColor = atom.themeColor
     }
     
     private func saveAtom() {
@@ -275,6 +318,9 @@ struct AtomTemplateEditorView: View {
             existingAtom.targetSets = sets
             existingAtom.targetReps = reps
             existingAtom.defaultRestTime = rest
+            existingAtom.iconSymbol = iconSymbol.isEmpty ? nil : iconSymbol
+            existingAtom.iconFrame = iconFrame
+            existingAtom.themeColor = themeColor
         } else {
             // Create new
             let nextOrder = (parentTemplate.atomTemplates.map(\.order).max() ?? -1) + 1
@@ -289,8 +335,11 @@ struct AtomTemplateEditorView: View {
                 targetReps: reps,
                 defaultRestTime: rest,
                 videoURL: videoValue,
-                parentMoleculeTemplate: parentTemplate
+                parentMoleculeTemplate: parentTemplate,
+                iconSymbol: iconSymbol.isEmpty ? nil : iconSymbol,
+                iconFrame: iconFrame
             )
+            newAtom.themeColor = themeColor
             
             modelContext.insert(newAtom)
             parentTemplate.atomTemplates.append(newAtom)

@@ -187,6 +187,53 @@ struct FilterSection: View {
     
     var body: some View {
         VStack(spacing: 12) {
+            // Selected Molecule Header (when filtering by specific molecule)
+            if let molecule = viewModel.selectedMolecule {
+                HStack(spacing: 16) {
+                    // Large Avatar (60x60)
+                    AvatarView(
+                        molecule: molecule,
+                        size: 60
+                    )
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(molecule.title)
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .lineLimit(1)
+                        
+                        Text(molecule.recurrenceDescription)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        
+                        if let compound = molecule.compound {
+                            Text(compound)
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.15))
+                                .foregroundStyle(Color.accentColor)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // Clear filter button
+                    Button {
+                        viewModel.selectedMolecule = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding()
+                .background(Color(uiColor: .systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal)
+            }
+            
             // Two-tier filter row
             HStack(spacing: 12) {
                 // Compound Filter
@@ -480,14 +527,20 @@ struct HabitStatRow: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            // Consistency Badge
-            Text(habit.consistencyRating.icon)
-                .font(.title3)
+            // Consistency Badge in circular container (40x40)
+            ZStack {
+                Circle()
+                    .fill(habit.consistencyRating.color.opacity(0.15))
+                Text(habit.consistencyRating.icon)
+                    .font(.title3)
+            }
+            .frame(width: 40, height: 40)
             
             VStack(alignment: .leading, spacing: 2) {
                 Text(habit.name)
                     .font(.subheadline)
                     .fontWeight(.medium)
+                    .lineLimit(1)
                 
                 Text("\(habit.completed)/\(habit.total) completed")
                     .font(.caption)

@@ -18,6 +18,7 @@ struct ProtocolApp: App {
     // MARK: - Properties
     
     private let notificationHandler = NotificationHandler()
+    @StateObject private var celebrationState = CelebrationState()
     @Environment(\.scenePhase) private var scenePhase
     
     // MARK: - Initializer
@@ -31,16 +32,40 @@ struct ProtocolApp: App {
     
     var body: some Scene {
         WindowGroup {
-            SplashScreenView()
-                .onAppear {
-                    setupNotifications()
-                    seedDataOnFirstLaunch()
+            ZStack {
+                SplashScreenView()
+                    .onAppear {
+                        setupNotifications()
+                        seedDataOnFirstLaunch()
+                    }
+                
+                // Gamification Overlay - Confetti (Z-Index 100)
+                ConfettiView(celebrationState: celebrationState)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .zIndex(100)
+                
+                // Perfect Day - Color Bomb (Z-Index 200)
+                if celebrationState.showPerfectDayBomb {
+                    ColorBombView(isShowing: $celebrationState.showPerfectDayBomb)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                        .zIndex(200)
                 }
-        }
-        .modelContainer(sharedModelContainer)
-        .environmentObject(MoleculeService(modelContext: sharedModelContainer.mainContext))
-        .onChange(of: scenePhase) { oldPhase, newPhase in
-            handleScenePhaseChange(from: oldPhase, to: newPhase)
+                
+                // Perfect Day - Greeting Card (Z-Index 201)
+                if celebrationState.showGreetingCard {
+                    GreetingCardView(isShowing: $celebrationState.showGreetingCard)
+                        .zIndex(201)
+                        // Greeting card needs hit testing to be dismissed by tap
+                }
+            }
+            .modelContainer(sharedModelContainer)
+            .environmentObject(MoleculeService(modelContext: sharedModelContainer.mainContext))
+            .environmentObject(celebrationState)
+            .onChange(of: scenePhase) { oldPhase, newPhase in
+                handleScenePhaseChange(from: oldPhase, to: newPhase)
+            }
         }
     }
     

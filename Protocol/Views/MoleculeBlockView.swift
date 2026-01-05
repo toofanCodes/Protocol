@@ -18,18 +18,14 @@ struct MoleculeBlockView: View {
     
     // MARK: - Computed Properties
     
-    private var backgroundColor: Color {
-        let title = instance.displayTitle.lowercased()
-        
-        if title.contains("lift") || title.contains("workout") || title.contains("gym") {
-            return .blue.opacity(0.8)
-        } else if title.contains("routine") || title.contains("skin") {
-            return .teal.opacity(0.8)
-        } else if title.contains("medication") || title.contains("thyroid") {
-            return .purple.opacity(0.8)
-        } else {
-            return Color.accentColor.opacity(0.8)
-        }
+    /// Uses the template's compound to determine background color
+    private var blockColor: Color {
+        Color.color(forCompound: instance.parentTemplate?.compound)
+    }
+    
+    /// Dynamic text color that contrasts with the tile background
+    private var textColor: Color {
+        blockColor.contrastingColor
     }
     
     private var atomCountSubtitle: String {
@@ -40,51 +36,60 @@ struct MoleculeBlockView: View {
     // MARK: - Body
     
     var body: some View {
-        HStack(alignment: .top, spacing: 5) {
-            // Status Strip
-            Rectangle()
-                .fill(instance.isCompleted ? Color.green : Color.white.opacity(0.5))
-                .frame(width: 4)
-                .clipShape(Capsule())
-                .padding(.vertical, 4)
-                .padding(.leading, 4)
+        HStack(alignment: .center, spacing: 8) {
+            // Avatar (28x28 for compact calendar view) with contrasting border
+            if let template = instance.parentTemplate {
+                AvatarView(
+                    molecule: template,
+                    size: 28
+                )
+            } else {
+                // Fallback for orphaned instances
+                ZStack {
+                    Circle()
+                        .fill(Color.accentColor)
+                    Text(String(instance.displayTitle.prefix(1)).uppercased())
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.white)
+                }
+                .frame(width: 28, height: 28)
+                .overlay(Circle().stroke(textColor.opacity(0.3), lineWidth: 1.5))
+            }
             
+            // Content with dynamic contrast colors
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .top) {
                     Text(instance.displayTitle)
                         .font(.system(.subheadline, design: .rounded, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .foregroundStyle(textColor)
+                        .lineLimit(1)
                     
                     Spacer()
                     
                     if instance.isCompleted {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.caption)
-                            .foregroundStyle(.white)
+                        .font(.caption)
+                            .foregroundStyle(textColor)
                     }
                 }
                 
                 Text(atomCountSubtitle)
                     .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.9))
-                
-                if let notes = instance.notes {
-                    Text(notes)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.8))
-                        .lineLimit(1)
-                }
+                    .foregroundStyle(textColor.opacity(0.8))
             }
-            .padding(.vertical, 12)
-            .padding(.trailing, 8)
             
-            Spacer(minLength: 0)
+            // Status Strip on right
+            Rectangle()
+                .fill(instance.isCompleted ? Color.green : textColor.opacity(0.5))
+                .frame(width: 4)
+                .clipShape(Capsule())
+                .padding(.vertical, 4)
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
         .background(
             LinearGradient(
-                colors: [backgroundColor, backgroundColor.opacity(0.7)],
+                colors: [blockColor, blockColor.opacity(0.85)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
