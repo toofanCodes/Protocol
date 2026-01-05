@@ -116,6 +116,12 @@ Protocol is **privacy-first**:
 
 ---
 
+## 🤖 AI-Assisted Development
+
+This is an endeavour to make use of AI tools to improve productivity. Technologies used Gemini CLI, Claude Opus, and Gemini 3 where Gemini CLI did the versioning and file management, Gemini 3 did much of the building, while Opus developed PRD's and test/unit cases for the app. All this was done in Antigravity IDE of Google.
+
+---
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
@@ -127,4 +133,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 | Version | Date | Notes |
 |---------|------|-------|
 | 1.0.0 | Jan 2026 | Initial release with migration safety |
-
