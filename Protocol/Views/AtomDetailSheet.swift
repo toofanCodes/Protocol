@@ -181,8 +181,14 @@ struct AtomDetailSheet: View {
                 }
                 
                 // Completed Sets Section
-                if !atom.sets.isEmpty {
-                    Section("Completed Sets") {
+                Section("Completed Sets") {
+                    if atom.sets.isEmpty {
+                        Text("No sets logged yet")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 8)
+                    } else {
                         ForEach(atom.sortedSets) { set in
                             HStack {
                                 Text("Set \(set.order)")

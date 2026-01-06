@@ -28,7 +28,7 @@ Protocol is a native iOS application designed to help users build **compound rou
 - ⏰ **Smart Reminders** — Multiple alerts per routine (15 min, 1 hour, etc.)
 - 📱 **Home Screen Widget** — View and complete tasks directly from home screen
 - 💾 **Offline First** — All data stored locally with SwiftData
-- 📊 **Insights** — Visual dashboards for streaks and completion history
+- 📊 **Advanced Insights** — Completion trends, consistency heatmaps, and time-of-day analysis
 - 🏋️ **Workout Tracking** — Sets, reps, weight logging for exercise atoms
 - 🎨 **All-Day Events** — Support for habits without specific times
 - 🏗️ **Blueprint Architect** — Bulk import habits via CSV with recurrence & compound support
@@ -41,7 +41,7 @@ Protocol is a native iOS application designed to help users build **compound rou
 
 | Layer | Technology |
 |-------|------------|
-| **UI** | SwiftUI |
+| **UI** | SwiftUI, SwiftCharts |
 | **Data** | SwiftData with VersionedSchema |
 | **Widgets** | WidgetKit |
 | **Background** | BGTaskScheduler |
@@ -135,5 +135,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 | Version | Date | Notes |
 |---------|------|-------|
+| 2.0.0 | Jan 2026 | Analytics Overhaul (Heatmaps, Trends), Performance Refactor |
 | 1.1.0 | Jan 2026 | Blueprint Architect CSV import, Gamification, Compounds |
 | 1.0.0 | Jan 2026 | Initial release with migration safety |

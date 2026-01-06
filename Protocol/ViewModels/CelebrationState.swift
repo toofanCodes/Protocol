@@ -1,5 +1,15 @@
 import SwiftUI
 
+// MARK: - Celebration Intensity Levels
+
+enum CelebrationIntensity: String, CaseIterable, Identifiable {
+    case subtle = "Subtle"
+    case normal = "Normal"
+    case maximum = "Maximum"
+    
+    var id: String { rawValue }
+}
+
 class CelebrationState: ObservableObject {
     /// Counter to trigger confetti bursts. Incrementing this causes the ConfettiView to fire.
     @Published var confettiCounter: Int = 0
@@ -10,6 +20,9 @@ class CelebrationState: ObservableObject {
     /// Perfect Day celebration states
     @Published var showPerfectDayBomb: Bool = false
     @Published var showGreetingCard: Bool = false
+    
+    /// Celebration intensity preference
+    @AppStorage("celebrationIntensity") var intensity: CelebrationIntensity = .normal
     
     /// Cooldown tracking to prevent rapid-fire triggers
     private var lastTriggerTime: Date = .distantPast
@@ -39,15 +52,31 @@ class CelebrationState: ObservableObject {
         guard !isInCooldown else { return }
         lastTriggerTime = Date()
         
-        print("🎉 Triggering molecule celebration!")
+        print("🎉 Triggering molecule celebration! (Intensity: \(intensity.rawValue))")
         celebrationColor = themeColor ?? .accentColor
         
-        // Play Sound
-        SoundManager.shared.playSound(.claps)
-        
-        // Fire Confetti
-        DispatchQueue.main.async {
-            self.confettiCounter += 1
+        switch intensity {
+        case .subtle:
+            // Haptic only - no sound or confetti
+            HapticFeedback.success()
+            
+        case .normal:
+            // Standard: Sound + Confetti
+            SoundManager.shared.playSound(.claps)
+            DispatchQueue.main.async {
+                self.confettiCounter += 1
+            }
+            
+        case .maximum:
+            // Extra celebration: Sound + Multiple confetti bursts
+            SoundManager.shared.playSound(.claps)
+            DispatchQueue.main.async {
+                self.confettiCounter += 1
+            }
+            // Additional burst after 300ms
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.confettiCounter += 1
+            }
         }
     }
     

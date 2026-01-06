@@ -28,7 +28,8 @@ class DataController {
             AtomTemplate.self,
             AtomInstance.self,
             WorkoutSet.self,
-            UserSettings.self
+            UserSettings.self,
+            PersistentAuditLog.self
         ])
         
         var modelConfiguration: ModelConfiguration
@@ -215,5 +216,115 @@ class DataController {
             sqlite3_finalize(stmt)
         }
         return names
+    }
+}
+
+// MARK: - Audit Log Models (Shared across Main App and Widget)
+
+/// Types of operations that can be logged
+enum AuditOperation: String, Codable {
+    case create = "CREATE"
+    case update = "UPDATE"
+    case delete = "DELETE"
+    case bulkCreate = "BULK_CREATE"
+    case bulkDelete = "BULK_DELETE"
+}
+
+/// Entity types that can be logged
+enum AuditEntityType: String, Codable {
+    case moleculeTemplate = "MoleculeTemplate"
+    case moleculeInstance = "MoleculeInstance"
+    case atomTemplate = "AtomTemplate"
+    case atomInstance = "AtomInstance"
+    case workoutSet = "WorkoutSet"
+}
+
+/// Represents a single field change (before/after)
+struct FieldChange: Codable {
+    let field: String
+    let oldValue: String?
+    let newValue: String?
+    
+    var description: String {
+        if let old = oldValue, let new = newValue {
+            return "\(field): '\(old)' → '\(new)'"
+        } else if let new = newValue {
+            return "\(field): (nil) → '\(new)'"
+        } else if let old = oldValue {
+            return "\(field): '\(old)' → (nil)"
+        }
+        return "\(field): changed"
+    }
+}
+
+/// SwiftData-backed Audit Log implementation for atomic transactions.
+/// Mirrors `AuditLogEntry` struct but lives in the database.
+@Model
+final class PersistentAuditLog {
+    /// Unique identifier
+    var id: UUID
+    
+    /// Timestamp of the operation
+    var timestamp: Date
+    
+    /// Operation type (Create, Update, Delete) stored as string
+    var operationRaw: String
+    
+    /// Entity type (MoleculeTemplate, etc.) stored as string
+    var entityTypeRaw: String
+    
+    /// ID of the entity being modified
+    var entityId: String
+    
+    /// Human readable name of the entity
+    var entityName: String?
+    
+    /// Field changes stored as JSON string
+    var changesJSON: String?
+    
+    /// Source of the change (file:line)
+    var callSite: String
+    
+    /// Additional debugging info
+    var additionalInfo: String?
+    
+    // MARK: - Computed Properties
+    
+    var operation: AuditOperation {
+        get { AuditOperation(rawValue: operationRaw) ?? .create }
+        set { operationRaw = newValue.rawValue }
+    }
+    
+    var entityType: AuditEntityType {
+        get { AuditEntityType(rawValue: entityTypeRaw) ?? .moleculeTemplate }
+        set { entityTypeRaw = newValue.rawValue }
+    }
+    
+    // MARK: - Initialization
+    
+    init(
+        operation: AuditOperation,
+        entityType: AuditEntityType,
+        entityId: String,
+        entityName: String? = nil,
+        changes: [FieldChange]? = nil,
+        callSite: String,
+        additionalInfo: String? = nil
+    ) {
+        self.id = UUID()
+        self.timestamp = Date()
+        self.operationRaw = operation.rawValue
+        self.entityTypeRaw = entityType.rawValue
+        self.entityId = entityId
+        self.entityName = entityName
+        self.callSite = callSite
+        self.additionalInfo = additionalInfo
+        
+        if let changes = changes {
+            let encoder = JSONEncoder()
+            if let data = try? encoder.encode(changes) {
+                self.changesJSON = String(data: data, encoding: .utf8)
+            }
+        }
     }
 }

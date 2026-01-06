@@ -18,6 +18,9 @@ final class AtomTemplate {
     /// Unique identifier
     var id: UUID
     
+    /// Whether the atom is archived (soft deleted)
+    var isArchived: Bool = false
+    
     /// Task title (e.g., "Drink Water")
     var title: String
     

@@ -267,44 +267,55 @@ struct CalendarHeader: View {
     @ObservedObject var viewModel: CalendarViewModel
     
     var body: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Button {
-                    withAnimation { viewModel.moveDate(by: -1) }
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.title3)
-                        .foregroundStyle(.primary)
-                }
-                
-                Spacer()
-                
-                Text(viewModel.title)
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                    .fontDesign(.rounded)
-                
-                Spacer()
-                
-                Button {
-                    withAnimation { viewModel.moveDate(by: 1) }
-                } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.title3)
-                        .foregroundStyle(.primary)
-                }
+        HStack {
+            Button {
+                withAnimation { viewModel.moveDate(by: -1) }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.title3)
+                    .foregroundStyle(.primary)
             }
-            .padding(.horizontal)
             
-            Picker("View Mode", selection: $viewModel.viewMode) {
-                ForEach(CalendarViewMode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
-                }
+            Spacer()
+            
+            Text(viewModel.title)
+                .font(.headline)
+                .fontWeight(.semibold)
+                .fontDesign(.rounded)
+            
+            Spacer()
+            
+            Button {
+                withAnimation { viewModel.moveDate(by: 1) }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.title3)
+                    .foregroundStyle(.primary)
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
+            
+            // View Mode Menu
+            Menu {
+                ForEach(CalendarViewMode.allCases) { mode in
+                    Button {
+                        withAnimation { viewModel.viewMode = mode }
+                    } label: {
+                        HStack {
+                            Text(mode.rawValue)
+                            if viewModel.viewMode == mode {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: viewModel.viewMode.iconName)
+                    .font(.title3)
+                    .foregroundStyle(.primary)
+                    .padding(.leading, 8)
+            }
         }
-        .padding(.vertical, 8)
+        .padding(.horizontal)
+        .padding(.vertical, 12)
         .background(Color(uiColor: .systemBackground))
     }
 }
@@ -428,20 +439,28 @@ struct DayView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            VStack(spacing: 0) {
-                // Section A: All-Day Dock (max 30% height)
-                if !allDayInstances.isEmpty {
-                    AllDayDockView(
-                        instances: allDayInstances,
-                        viewModel: viewModel
-                    )
-                    .frame(maxHeight: geometry.size.height * 0.3)
+            if timedInstances.isEmpty && allDayInstances.isEmpty {
+                ContentUnavailableView(
+                    "Nothing Scheduled",
+                    systemImage: "calendar.badge.plus",
+                    description: Text("Long press on the timeline to add a habit.")
+                )
+            } else {
+                VStack(spacing: 0) {
+                    // Section A: All-Day Dock (max 30% height)
+                    if !allDayInstances.isEmpty {
+                        AllDayDockView(
+                            instances: allDayInstances,
+                            viewModel: viewModel
+                        )
+                        .frame(maxHeight: geometry.size.height * 0.3)
+                        
+                        Divider()
+                    }
                     
-                    Divider()
+                    // Section B: Timeline
+                    timelineView
                 }
-                
-                // Section B: Timeline
-                timelineView
             }
         }
     }
@@ -512,7 +531,23 @@ struct DayView: View {
                                 }
                             },
                             onDelete: {
+                                // Capture info before deletion
+                                let instanceId = instance.id.uuidString
+                                let instanceName = instance.displayTitle
+                                
                                 NotificationManager.shared.cancelNotification(for: instance)
+                                modelContext.delete(instance)
+                                try? modelContext.save()
+                                
+                                // Audit log
+                                Task {
+                                    await AuditLogger.shared.logDelete(
+                                        entityType: .moleculeInstance,
+                                        entityId: instanceId,
+                                        entityName: instanceName,
+                                        additionalInfo: "Deleted via DayView context menu"
+                                    )
+                                }
                             }
                         )
                     }
@@ -799,9 +834,23 @@ struct AllDayDockView: View {
                             Divider()
                             
                             Button(role: .destructive) {
+                                // Capture info before deletion
+                                let instanceId = instance.id.uuidString
+                                let instanceName = instance.displayTitle
+                                
                                 NotificationManager.shared.cancelNotification(for: instance)
                                 modelContext.delete(instance)
                                 try? modelContext.save()
+                                
+                                // Audit log
+                                Task {
+                                    await AuditLogger.shared.logDelete(
+                                        entityType: .moleculeInstance,
+                                        entityId: instanceId,
+                                        entityName: instanceName,
+                                        additionalInfo: "Deleted via AllDayDockView context menu"
+                                    )
+                                }
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -1235,9 +1284,23 @@ struct WeekView: View {
                                         Divider()
                                         
                                         Button(role: .destructive) {
+                                            // Capture info before deletion
+                                            let instanceId = instance.id.uuidString
+                                            let instanceName = instance.displayTitle
+                                            
                                             NotificationManager.shared.cancelNotification(for: instance)
                                             modelContext.delete(instance)
                                             try? modelContext.save()
+                                            
+                                            // Audit log
+                                            Task {
+                                                await AuditLogger.shared.logDelete(
+                                                    entityType: .moleculeInstance,
+                                                    entityId: instanceId,
+                                                    entityName: instanceName,
+                                                    additionalInfo: "Deleted via MonthView context menu"
+                                                )
+                                            }
                                         } label: {
                                             Label("Delete", systemImage: "trash")
                                         }

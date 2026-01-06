@@ -67,6 +67,9 @@ final class AtomInstance {
     /// URL for instructional video
     var videoURL: String?
     
+    /// Whether this instance has been soft-deleted (archived)
+    var isArchived: Bool = false
+    
     // MARK: - Relationships
     
     /// Belongs to one MoleculeInstance

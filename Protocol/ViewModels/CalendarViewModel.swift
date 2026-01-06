@@ -14,6 +14,14 @@ enum CalendarViewMode: String, CaseIterable, Identifiable {
     case month = "Month"
     
     var id: String { rawValue }
+    
+    var iconName: String {
+        switch self {
+        case .day: return "calendar.day.timeline.left"
+        case .week: return "calendar"
+        case .month: return "calendar.badge.clock"
+        }
+    }
 }
 
 enum FilterOption: Equatable, Hashable, Identifiable {

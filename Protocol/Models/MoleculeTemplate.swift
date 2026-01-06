@@ -247,10 +247,6 @@ final class MoleculeTemplate {
         // Get the time components from baseTime
         let timeComponents = calendar.dateComponents([.hour, .minute], from: baseTime)
         
-        // Get existing instance dates for this template to prevent duplicates
-        // Note: For large datasets, this might be slow, but for local usage it's fine
-        let existingDates = Set(instances.map { calendar.startOfDay(for: $0.scheduledDate) })
-        
         while currentDate <= endDate {
             // Check end rule
             switch endRuleType {
@@ -268,9 +264,8 @@ final class MoleculeTemplate {
             
             // Check if this date matches the recurrence pattern
             if shouldGenerateInstance(for: currentDate, calendar: calendar) {
-                // Idempotency check: Skip if instance already exists for this date
-                let dateKey = calendar.startOfDay(for: currentDate)
-                guard !existingDates.contains(dateKey) else {
+                // Idempotency check: Use predicate-based query instead of loading all instances
+                guard !instanceExists(for: currentDate, in: context) else {
                     // Already exists, skip to next day
                     currentDate = calendar.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate.addingTimeInterval(86400)
                     continue
@@ -306,6 +301,38 @@ final class MoleculeTemplate {
         }
         
         return generatedInstances
+    }
+    
+    /// Checks if an instance already exists for a given date using a predicate-based query.
+    /// This is memory-efficient as it doesn't load all instances into memory.
+    /// - Parameters:
+    ///   - date: The date to check
+    ///   - context: The ModelContext to query
+    /// - Returns: true if an instance already exists for this template on this date
+    private func instanceExists(for date: Date, in context: ModelContext) -> Bool {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: date)
+        guard let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) else {
+            return false
+        }
+        let templateId = self.id
+        
+        var descriptor = FetchDescriptor<MoleculeInstance>(
+            predicate: #Predicate { instance in
+                instance.parentTemplate?.id == templateId &&
+                instance.scheduledDate >= startOfDay &&
+                instance.scheduledDate < endOfDay
+            }
+        )
+        descriptor.fetchLimit = 1
+        
+        do {
+            let count = try context.fetchCount(descriptor)
+            return count > 0
+        } catch {
+            // Fallback: check in-memory relationship (less efficient but safe)
+            return instances.contains { calendar.isDate($0.scheduledDate, inSameDayAs: date) }
+        }
     }
     
     /// Legacy method for backwards compatibility - generates a specific count of instances

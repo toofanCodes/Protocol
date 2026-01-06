@@ -89,7 +89,7 @@ struct MoleculeBlockView: View {
         .padding(.vertical, 8)
         .background(
             LinearGradient(
-                colors: [blockColor, blockColor.opacity(0.85)],
+                colors: [blockColor.opacity(0.7), blockColor.opacity(0.55)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )

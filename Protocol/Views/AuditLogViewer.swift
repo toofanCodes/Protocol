@@ -2,10 +2,11 @@
 //  AuditLogViewer.swift
 //  Protocol
 //
-//  Debug view for viewing and exporting audit logs.
+//  Debug view for viewing, filtering, and exporting audit logs.
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct AuditLogViewer: View {
     @State private var entries: [AuditLogEntry] = []
@@ -13,6 +14,36 @@ struct AuditLogViewer: View {
     @State private var showingExportSheet = false
     @State private var exportData: Data?
     @State private var selectedEntry: AuditLogEntry?
+    
+    // MARK: - Filter State
+    @State private var operationFilter: AuditOperation? = nil
+    @State private var entityFilter: AuditEntityType? = nil
+    @State private var startDate: Date = Calendar.current.date(byAdding: .day, value: -7, to: Date())!
+    @State private var endDate: Date = Date()
+    @State private var showFilters = false
+    
+    // MARK: - Export State
+    @State private var showingExportOptions = false
+    @State private var csvExportURL: URL?
+    @State private var shareItems: [Any] = []
+    
+    var filteredEntries: [AuditLogEntry] {
+        entries.filter { entry in
+            // Operation filter
+            if let op = operationFilter, entry.operation != op {
+                return false
+            }
+            // Entity filter
+            if let entity = entityFilter, entry.entityType != entity {
+                return false
+            }
+            // Date range filter
+            if entry.timestamp < startDate || entry.timestamp > endDate {
+                return false
+            }
+            return true
+        }
+    }
     
     var body: some View {
         Group {
@@ -25,13 +56,33 @@ struct AuditLogViewer: View {
                     description: Text("Data operations will be logged here for debugging.")
                 )
             } else {
-                List {
-                    ForEach(entries) { entry in
-                        AuditLogRow(entry: entry)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedEntry = entry
-                            }
+                VStack(spacing: 0) {
+                    // Filter bar
+                    if showFilters {
+                        filterSection
+                            .padding()
+                            .background(Color(.systemGroupedBackground))
+                    }
+                    
+                    // Results count
+                    HStack {
+                        Text("\(filteredEntries.count) of \(entries.count) entries")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGroupedBackground))
+                    
+                    List {
+                        ForEach(filteredEntries) { entry in
+                            AuditLogRow(entry: entry)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedEntry = entry
+                                }
+                        }
                     }
                 }
             }
@@ -42,11 +93,28 @@ struct AuditLogViewer: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button {
-                        exportLogs()
+                        showFilters.toggle()
                     } label: {
-                        Label("Export Logs", systemImage: "square.and.arrow.up")
+                        Label(showFilters ? "Hide Filters" : "Show Filters", systemImage: "line.3.horizontal.decrease.circle")
                     }
-                    .disabled(entries.isEmpty)
+                    
+                    Divider()
+                    
+                    Button {
+                        exportAsJSON()
+                    } label: {
+                        Label("Export as JSON", systemImage: "doc.badge.arrow.up")
+                    }
+                    .disabled(filteredEntries.isEmpty)
+                    
+                    Button {
+                        exportAsCSV()
+                    } label: {
+                        Label("Export as CSV", systemImage: "tablecells")
+                    }
+                    .disabled(filteredEntries.isEmpty)
+                    
+                    Divider()
                     
                     Button(role: .destructive) {
                         clearLogs()
@@ -69,11 +137,68 @@ struct AuditLogViewer: View {
             AuditLogDetailView(entry: entry)
         }
         .sheet(isPresented: $showingExportSheet) {
-            if let data = exportData {
-                ShareSheet(activityItems: [data])
+            if !shareItems.isEmpty {
+                ShareSheet(activityItems: shareItems)
             }
         }
     }
+    
+    // MARK: - Filter Section
+    
+    private var filterSection: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Operation")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("Operation", selection: $operationFilter) {
+                    Text("All").tag(nil as AuditOperation?)
+                    ForEach([AuditOperation.create, .update, .delete, .bulkCreate, .bulkDelete], id: \.self) { op in
+                        Text(op.rawValue).tag(op as AuditOperation?)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+            
+            HStack {
+                Text("Entity")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("Entity", selection: $entityFilter) {
+                    Text("All").tag(nil as AuditEntityType?)
+                    ForEach([AuditEntityType.moleculeTemplate, .moleculeInstance, .atomTemplate, .atomInstance, .workoutSet], id: \.self) { entity in
+                        Text(entity.rawValue).tag(entity as AuditEntityType?)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+            
+            HStack {
+                Text("Date Range")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                DatePicker("From", selection: $startDate, displayedComponents: .date)
+                    .labelsHidden()
+                Text("to")
+                    .font(.caption)
+                DatePicker("To", selection: $endDate, displayedComponents: .date)
+                    .labelsHidden()
+            }
+            
+            Button("Reset Filters") {
+                operationFilter = nil
+                entityFilter = nil
+                startDate = Calendar.current.date(byAdding: .day, value: -7, to: Date())!
+                endDate = Date()
+            }
+            .font(.caption)
+        }
+    }
+    
+    // MARK: - Actions
     
     private func loadEntries() async {
         isLoading = true
@@ -81,13 +206,51 @@ struct AuditLogViewer: View {
         isLoading = false
     }
     
-    private func exportLogs() {
+    private func exportAsJSON() {
         Task {
             if let data = await AuditLogger.shared.exportAsJSON() {
-                exportData = data
+                shareItems = [data]
                 showingExportSheet = true
             }
         }
+    }
+    
+    private func exportAsCSV() {
+        Task {
+            let csv = generateCSV(from: filteredEntries)
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("audit_log.csv")
+            do {
+                try csv.write(to: tempURL, atomically: true, encoding: .utf8)
+                shareItems = [tempURL]
+                showingExportSheet = true
+            } catch {
+                AppLogger.audit.error("Failed to export CSV: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    private func generateCSV(from entries: [AuditLogEntry]) -> String {
+        var csv = "Timestamp,Operation,Entity Type,Entity ID,Entity Name,Call Site,Changes,Additional Info\n"
+        
+        let dateFormatter = ISO8601DateFormatter()
+        
+        for entry in entries {
+            let timestamp = dateFormatter.string(from: entry.timestamp)
+            let changes = entry.changes?.map { $0.description }.joined(separator: "; ") ?? ""
+            let row = [
+                timestamp,
+                entry.operation.rawValue,
+                entry.entityType.rawValue,
+                entry.entityId,
+                entry.entityName ?? "",
+                entry.callSite,
+                "\"\(changes)\"",
+                entry.additionalInfo ?? ""
+            ].joined(separator: ",")
+            csv += row + "\n"
+        }
+        
+        return csv
     }
     
     private func clearLogs() {

@@ -11,6 +11,8 @@ import UniformTypeIdentifiers
 
 struct BlueprintImportView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    @Query private var existingTemplates: [MoleculeTemplate]
     
     // MARK: - State
     
@@ -26,7 +28,23 @@ struct BlueprintImportView: View {
     @State private var showingConfirmation = false
     @State private var templateURL: URL?
     
+    // Selection state for import candidates
+    @State private var selectedItemIDs: Set<UUID> = []
+    
     private let csvManager = CSVManager()
+    
+    // MARK: - Computed
+    
+    // Check if an item is a potential duplicate based on title
+    private func isDuplicate(_ item: ParsedMolecule) -> Bool {
+        existingTemplates.contains { existing in
+            existing.title.localizedCaseInsensitiveCompare(item.name) == .orderedSame
+        }
+    }
+    
+    private var selectedItemsCount: Int {
+        selectedItemIDs.count
+    }
     
     // MARK: - Body
     
@@ -53,6 +71,21 @@ struct BlueprintImportView: View {
         }
         .navigationTitle("Blueprint Architect")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if case .results(let report) = importState, !report.validItems.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        if selectedItemsCount == report.validItems.count {
+                            selectedItemIDs.removeAll()
+                        } else {
+                            selectedItemIDs = Set(report.validItems.map(\.id))
+                        }
+                    } label: {
+                        Text(selectedItemsCount == report.validItems.count ? "Deselect All" : "Select All")
+                    }
+                }
+            }
+        }
         .fileImporter(
             isPresented: $showingFileImporter,
             allowedContentTypes: [.commaSeparatedText, .plainText],
@@ -148,39 +181,69 @@ struct BlueprintImportView: View {
         if !report.validItems.isEmpty {
             Section {
                 ForEach(report.validItems) { item in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.name)
-                                .fontWeight(.medium)
+                    let isDupe = isDuplicate(item)
+                    
+                    Button {
+                        if selectedItemIDs.contains(item.id) {
+                            selectedItemIDs.remove(item.id)
+                        } else {
+                            selectedItemIDs.insert(item.id)
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: selectedItemIDs.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(selectedItemIDs.contains(item.id) ? Color.green : Color.secondary)
+                                .font(.title3)
                             
-                            HStack(spacing: 8) {
-                                if item.isAllDay {
-                                    Text("All Day")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                } else {
-                                    Text(item.time.formatted(date: .omitted, time: .shortened))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(item.name)
+                                        .fontWeight(.medium)
+                                        .foregroundStyle(Color.primary)
+                                    
+                                    if isDupe {
+                                        Text("Duplicate")
+                                            .font(.caption2)
+                                            .fontWeight(.bold)
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.orange)
+                                            .cornerRadius(4)
+                                    }
                                 }
                                 
-                                if !item.atoms.isEmpty {
-                                    Text("\(item.atoms.count) atoms")
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
+                                HStack(spacing: 8) {
+                                    if item.isAllDay {
+                                        Text("All Day")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    } else {
+                                        Text(item.time.formatted(date: .omitted, time: .shortened))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    
+                                    if !item.atoms.isEmpty {
+                                        Text("\(item.atoms.count) atoms")
+                                            .font(.caption)
+                                            .foregroundStyle(.tertiary)
+                                    }
                                 }
                             }
+                            
+                            Spacer()
                         }
-                        
-                        Spacer()
-                        
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
                     }
+                    .buttonStyle(.plain) // Make whole row tappable
                 }
             } header: {
-                Label("Ready to Build (\(report.validItems.count))", systemImage: "checkmark.circle.fill")
+                Label("Ready to Build (\(selectedItemsCount)/\(report.validItems.count))", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
+            } footer: {
+                if report.validItems.contains(where: isDuplicate) {
+                    Text("Duplicate items are marked in orange. Importing them will create copies.")
+                }
             }
         }
         
@@ -190,32 +253,35 @@ struct BlueprintImportView: View {
                 if report.hasErrors {
                     showingConfirmation = true
                 } else {
-                    commitItems(report.validItems)
+                    let itemsToImport = report.validItems.filter { selectedItemIDs.contains($0.id) }
+                    commitItems(itemsToImport)
                 }
             } label: {
                 HStack {
                     Spacer()
-                    Label("Build Empire", systemImage: "hammer.fill")
+                    Label("Import \(selectedItemsCount) Molecules", systemImage: "hammer.fill")
                         .fontWeight(.semibold)
                     Spacer()
                 }
             }
-            .disabled(report.validItems.isEmpty)
+            .disabled(selectedItemsCount == 0)
             .alert("Import with Errors?", isPresented: $showingConfirmation) {
                 Button("Cancel", role: .cancel) { }
-                Button("Import \(report.validItems.count) Items") {
-                    commitItems(report.validItems)
+                Button("Import \(selectedItemsCount) Items") {
+                    let itemsToImport = report.validItems.filter { selectedItemIDs.contains($0.id) }
+                    commitItems(itemsToImport)
                 }
             } message: {
-                Text("Import \(report.validItems.count) valid items and skip \(report.errors.count) errors?")
+                Text("Import \(selectedItemsCount) selected items and ignore errors?")
             }
             
             Button(role: .destructive) {
                 importState = .idle
+                selectedItemIDs.removeAll()
             } label: {
                 HStack {
                     Spacer()
-                    Text("Start Over")
+                    Text("Cancel & Start Over")
                     Spacer()
                 }
             }
@@ -300,11 +366,30 @@ struct BlueprintImportView: View {
             do {
                 let content = try String(contentsOf: url, encoding: .utf8)
                 let report = csvManager.analyze(csvString: content)
+                
+                // Pre-select non-duplicates by default
+                let nonDuplicates = report.validItems.filter { !isDuplicate($0) }
+                // If everything is a duplicate, select nothing. If some are new, select only new ones.
+                // If all are new, select all.
+                if !nonDuplicates.isEmpty {
+                    selectedItemIDs = Set(nonDuplicates.map(\.id))
+                } else {
+                    // Optional: Select nothing if everything is a duplicate to force manual override
+                    selectedItemIDs = [] 
+                }
+                
                 importState = .results(report)
             } catch {
                 // Try other encodings
                 if let content = try? String(contentsOf: url, encoding: .isoLatin1) {
                     let report = csvManager.analyze(csvString: content)
+                    // Logic repeats for fallback encoding... slightly ugly duplication but safe
+                     let nonDuplicates = report.validItems.filter { !isDuplicate($0) }
+                    if !nonDuplicates.isEmpty {
+                        selectedItemIDs = Set(nonDuplicates.map(\.id))
+                    } else {
+                        selectedItemIDs = []
+                    }
                     importState = .results(report)
                 } else {
                     importState = .idle
@@ -319,8 +404,11 @@ struct BlueprintImportView: View {
     private func commitItems(_ items: [ParsedMolecule]) {
         let _ = csvManager.commit(items: items, context: modelContext)
         importState = .idle
+        selectedItemIDs.removeAll()
+        dismiss() // Auto-close after successful import
     }
 }
+
 
 #Preview {
     NavigationStack {

@@ -91,17 +91,36 @@ final class MoleculeService: ObservableObject {
     /// Deletes a template and all its instances
     /// Deletes a template (Soft Delete/Archive)
     /// Marks as archived and removes future instances. Preserves history.
-    func deleteTemplate(_ template: MoleculeTemplate) {
+    /// Deletes a template (Soft Delete/Archive)
+    /// Marks as archived and removes future instances. Preserves history.
+    /// Uses Atomic Transaction for durability.
+    func deleteTemplate(_ template: MoleculeTemplate) async throws {
         let templateName = template.title
         let templateId = template.id.uuidString
         
-        // 1. Archive Template
-        template.isArchived = true
+        print("🔴 DELETION STARTED for \(templateName)")
         
-        // 2. Delete Future Instances
+        // 0. Pre-calculate values (Read-only, no UI side effects)
         let now = Date()
         let instancesToDelete = template.instances.filter { $0.scheduledDate > now }
         let deleteCount = instancesToDelete.count
+        
+        // 1. Insert Audit Log FIRST (Before reactive changes)
+        // This transaction step is prepared but not committed.
+        let logEntry = PersistentAuditLog(
+            operation: .delete,
+            entityType: .moleculeTemplate,
+            entityId: templateId,
+            entityName: templateName,
+            callSite: "MoleculeService.swift",
+            additionalInfo: "Soft deleted (Archived). Removed \(deleteCount) future instances."
+        )
+        modelContext.insert(logEntry)
+        print("🟡 AUDIT LOG PREPARED (Template not archived yet)")
+        
+        // 2. Archive Template & Delete Instances (Trigger SwiftUI Updates)
+        // Note: SwiftUI reacts immediately to this part!
+        template.isArchived = true
         
         for instance in instancesToDelete {
             NotificationManager.shared.cancelNotification(for: instance)
@@ -111,16 +130,18 @@ final class MoleculeService: ObservableObject {
         // Cancel notifications
         NotificationManager.shared.cancelNotifications(for: template)
         
-        try? modelContext.save()
+        print("🟠 ARCHIVE FLAG SET (SwiftUI Reaction Window Open)")
         
-        // Audit log
-        Task {
-            await AuditLogger.shared.logDelete(
-                entityType: .moleculeTemplate,
-                entityId: templateId,
-                entityName: templateName,
-                additionalInfo: "Soft deleted (Archived). Removed \(deleteCount) future instances."
-            )
+        // 3. Atomic Save (Commit Log + Archive together)
+        do {
+            try modelContext.save()
+            print("🟢 SAVE COMPLETED - Persistence Secured")
+            print("🔵 AUDIT LOG COMMITTED")
+        } catch {
+            print("❌ SAVE FAILED: \(error)")
+            AppLogger.data.error("Failed to archive template: \(error)")
+            modelContext.rollback() // Revert UI state on failure
+            throw error
         }
     }
     
@@ -464,7 +485,7 @@ final class MoleculeService: ObservableObject {
             let oldTarget = atomTemplate.targetValue
             atomTemplate.targetValue = current
             try? modelContext.save()
-            print("💪 Progressive Overload: Updated baseline to \(current) \(atomTemplate.unit ?? "")")
+            AppLogger.data.info("💪 Progressive Overload: Updated baseline to \(current) \(atomTemplate.unit ?? "")")
             
             // Audit log
             Task {

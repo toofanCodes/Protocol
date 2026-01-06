@@ -61,6 +61,9 @@ final class MoleculeInstance {
     /// Inherited from parent template when created
     var isAllDay: Bool = false
     
+    /// Whether this instance has been soft-deleted (archived)
+    var isArchived: Bool = false
+    
     // MARK: - Relationships
     
     /// Many-to-One relationship with MoleculeTemplate

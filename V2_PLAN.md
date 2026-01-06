@@ -63,4 +63,58 @@ Version 2.0 will integrate Fitbit API data against exercises and habits, enablin
 
 ---
 
+## AI/LLM Chatbot Integration (Gemini API)
+
+> **Priority:** Future  
+> **Prerequisite:** Analytics Query Layer must be implemented first
+
+### Overview
+
+Add an in-app conversational assistant powered by Gemini LLM API that can answer questions about habits, provide insights, and offer personalized recommendations.
+
+### ChatDataProvider Service
+
+A new service that extracts and summarizes user data for LLM context:
+
+```swift
+@MainActor
+class ChatDataProvider {
+    private let modelContext: ModelContext
+    
+    // Context extraction methods:
+    func recentActivitySummary(days: Int = 7) async -> String
+    func habitPerformanceContext(habitId: UUID) async -> String
+    func upcomingScheduleContext() async -> String
+    func streakAndConsistencyContext() async -> String
+    
+    // Token-efficient summaries (prevents context overflow):
+    func compressedHistorySummary(maxTokens: Int = 2000) async -> String
+}
+```
+
+### Data Points to Expose
+
+| Data Category | Example Output |
+|---------------|----------------|
+| Recent completions | "Last 7 days: 23/28 habits completed (82%)" |
+| Top/bottom performers | "Strongest: Morning Run (95%), Weakest: Reading (40%)" |
+| Streaks | "Current streak: 12 days. Best ever: 34 days." |
+| Time patterns | "Most productive time: 7-9 AM" |
+| Upcoming items | "Today: 4 remaining. Tomorrow: 6 scheduled." |
+
+### API Integration
+
+- **Endpoint:** Gemini API (`generativelanguage.googleapis.com`)
+- **Auth:** API key stored in Keychain (not hardcoded)
+- **Rate Limits:** Respect per-minute quotas
+- **Privacy:** User must opt-in; no data leaves device without consent
+
+### UI Concept
+
+- Chat bubble accessible from Settings or a dedicated tab
+- Pre-built quick prompts: "How am I doing this week?", "What should I focus on?"
+- Conversational UI with message history (stored locally)
+
+---
+
 *This plan will be revisited when V1 is stable and ready for expansion.*

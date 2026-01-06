@@ -187,7 +187,7 @@ final class BackupManager: ObservableObject {
         
         // Skip if manual
         if frequencyRaw == "Manual" {
-            print("🚫 Auto-Backup skipped (Manual preference)")
+            AppLogger.backup.info("🚫 Auto-Backup skipped (Manual preference)")
             return
         }
         
@@ -204,13 +204,13 @@ final class BackupManager: ObservableObject {
         
         // If time interval passed
         if now.timeIntervalSince(lastDate) > interval {
-            print("🔄 Performing Auto-Backup (\(frequencyRaw))...")
+            AppLogger.backup.info("🔄 Performing Auto-Backup (\(frequencyRaw))...")
             do {
                 _ = try await createBackup(context: context)
                 UserDefaults.standard.set(now, forKey: "LastAutoBackupDate")
-                print("✅ Auto-Backup complete.")
+                AppLogger.backup.info("✅ Auto-Backup complete.")
             } catch {
-                print("❌ Auto-Backup failed: \(error)")
+                AppLogger.backup.error("❌ Auto-Backup failed: \(error.localizedDescription)")
             }
         }
     }

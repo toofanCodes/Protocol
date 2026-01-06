@@ -71,18 +71,12 @@ struct MoleculeEditorView: View {
                         }
                     }
                     
-                    DatePicker(
-                        "Date",
-                        selection: $editedTime,
-                        displayedComponents: .date
-                    )
-                    .disabled(true) // Date is fixed for instances
                 }
                 
                 // Notes Section
                 Section("Notes") {
                     TextEditor(text: $editedNotes)
-                        .frame(minHeight: 100)
+                        .frame(minHeight: 150)
                         .onChange(of: editedNotes) { _, _ in
                             checkForChanges()
                         }
@@ -94,10 +88,10 @@ struct MoleculeEditorView: View {
                         LabeledContent("Series Title", value: template.title)
                         LabeledContent("Recurrence", value: template.recurrenceDescription)
                         
-                        if instance.isException {
+                    if instance.isException {
                             HStack {
                                 Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
+                                .foregroundStyle(.orange)
                                 Text("This event has been modified from the series")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -253,8 +247,28 @@ struct MoleculeEditorView: View {
     }
     
     private func deleteAndDismiss() {
+        // Capture info before deletion
+        let instanceId = instance.id.uuidString
+        let instanceName = instance.displayTitle
+        
+        // Cancel notification
+        NotificationManager.shared.cancelNotification(for: instance)
+        
+        // Delete the instance
         modelContext.delete(instance)
         try? modelContext.save()
+        
+        // Audit log
+        Task {
+            await AuditLogger.shared.logDelete(
+                entityType: .moleculeInstance,
+                entityId: instanceId,
+                entityName: instanceName,
+                additionalInfo: "Deleted via MoleculeEditorView"
+            )
+        }
+        
+        // Dismiss after deletion
         dismiss()
     }
     
