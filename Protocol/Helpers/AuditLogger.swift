@@ -9,24 +9,7 @@
 import Foundation
 
 // MARK: - Audit Log Models
-
-/// Types of operations that can be logged
-enum AuditOperation: String, Codable {
-    case create = "CREATE"
-    case update = "UPDATE"
-    case delete = "DELETE"
-    case bulkCreate = "BULK_CREATE"
-    case bulkDelete = "BULK_DELETE"
-}
-
-/// Entity types that can be logged
-enum AuditEntityType: String, Codable {
-    case moleculeTemplate = "MoleculeTemplate"
-    case moleculeInstance = "MoleculeInstance"
-    case atomTemplate = "AtomTemplate"
-    case atomInstance = "AtomInstance"
-    case workoutSet = "WorkoutSet"
-}
+// Moved to Models/PersistentAuditLog.swift for visibility
 
 /// A single audit log entry
 struct AuditLogEntry: Codable, Identifiable {
@@ -86,23 +69,7 @@ struct AuditLogEntry: Codable, Identifiable {
     }
 }
 
-/// Represents a single field change (before/after)
-struct FieldChange: Codable {
-    let field: String
-    let oldValue: String?
-    let newValue: String?
-    
-    var description: String {
-        if let old = oldValue, let new = newValue {
-            return "\(field): '\(old)' → '\(new)'"
-        } else if let new = newValue {
-            return "\(field): (nil) → '\(new)'"
-        } else if let old = oldValue {
-            return "\(field): '\(old)' → (nil)"
-        }
-        return "\(field): changed"
-    }
-}
+// FieldChange struct moved to Models/PersistentAuditLog.swift
 
 // MARK: - AuditLogger
 
@@ -268,7 +235,7 @@ actor AuditLogger {
         await save()
         
         // Debug print
-        print("📋 AUDIT: \(entry.summary) [\(entry.callSite)]")
+        AppLogger.audit.info("📋 AUDIT: \(entry.summary) [\(entry.callSite)]")
     }
     
     private func formatCallSite(file: String, line: Int) -> String {
@@ -302,7 +269,7 @@ actor AuditLogger {
             decoder.dateDecodingStrategy = .iso8601
             entries = try decoder.decode([AuditLogEntry].self, from: data)
         } catch {
-            print("⚠️ Failed to load audit log: \(error)")
+            AppLogger.audit.error("⚠️ Failed to load audit log: \(error.localizedDescription)")
             entries = []
         }
     }
@@ -316,7 +283,7 @@ actor AuditLogger {
             let data = try encoder.encode(entries)
             try data.write(to: url, options: .atomic)
         } catch {
-            print("⚠️ Failed to save audit log: \(error)")
+            AppLogger.audit.error("⚠️ Failed to save audit log: \(error.localizedDescription)")
         }
     }
     
