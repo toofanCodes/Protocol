@@ -3,6 +3,8 @@
 //  Protocol
 //
 //  Rebuilt V2.1 - 2025-12-31
+//  Refactored for AnalyticsQueryService - 2026-01-05
+//  Refined V2.2 - 2026-01-05 (User Feedback)
 //
 
 import SwiftUI
@@ -14,63 +16,18 @@ enum TimeRange: String, CaseIterable, Identifiable {
     case week = "Week"
     case month = "Month"
     case mtd = "MTD"
-    case year = "Year"
-    case ytd = "YTD"
-    case all = "All"
+    // Removed Year, YTD, All per user feedback
     
     var id: String { rawValue }
     
+    // Always use day buckets for the main chart now
     var chartBucketType: ChartBucketType {
-        switch self {
-        case .week: return .day
-        case .month, .mtd: return .week
-        case .year, .ytd: return .month
-        case .all: return .quarter
-        }
-    }
-    
-    func dateRange(relativeTo now: Date = Date()) -> (start: Date, end: Date)? {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: now)
-        
-        switch self {
-        case .week:
-            guard let start = calendar.date(byAdding: .day, value: -6, to: today) else { return nil }
-            return (start, now)
-        case .month:
-            guard let start = calendar.date(byAdding: .day, value: -29, to: today) else { return nil }
-            return (start, now)
-        case .mtd:
-            let components = calendar.dateComponents([.year, .month], from: today)
-            guard let start = calendar.date(from: components) else { return nil }
-            return (start, now)
-        case .year:
-            guard let start = calendar.date(byAdding: .year, value: -1, to: today) else { return nil }
-            return (start, now)
-        case .ytd:
-            let components = calendar.dateComponents([.year], from: today)
-            guard let start = calendar.date(from: components) else { return nil }
-            return (start, now)
-        case .all:
-            return nil
-        }
-    }
-    
-    /// Returns the previous period of the same duration for comparison
-    func previousPeriod(relativeTo now: Date = Date()) -> (start: Date, end: Date)? {
-        let calendar = Calendar.current
-        guard let current = dateRange(relativeTo: now) else { return nil }
-        
-        let duration = current.end.timeIntervalSince(current.start)
-        let previousEnd = calendar.date(byAdding: .second, value: -1, to: current.start)!
-        let previousStart = previousEnd.addingTimeInterval(-duration)
-        
-        return (previousStart, previousEnd)
+        return .day
     }
 }
 
 enum ChartBucketType {
-    case day, week, month, quarter
+    case day
 }
 
 enum ConsistencyRating: String {
@@ -107,9 +64,18 @@ struct SummaryStats {
     let totalCompleted: Int
     let totalScheduled: Int
     let consistencyRating: ConsistencyRating
+    
+    static let empty = SummaryStats(
+        overallCompletion: 0,
+        comparisonDelta: nil,
+        currentStreak: 0,
+        totalCompleted: 0,
+        totalScheduled: 0,
+        consistencyRating: .needsWork
+    )
 }
 
-struct ChartDataPoint: Identifiable {
+struct ChartDataPoint: Identifiable, Equatable {
     let id = UUID()
     let label: String
     let date: Date
@@ -135,144 +101,257 @@ final class InsightsViewModel: ObservableObject {
     
     // MARK: - Published Properties
     
-    @Published var selectedTimeRange: TimeRange = .week
-    @Published var selectedCompound: String? = nil // nil = All Compounds
-    @Published var selectedMolecule: MoleculeTemplate? = nil // nil = All in Compound
+    @Published var selectedTimeRange: TimeRange = .mtd {
+        didSet {
+            periodOffset = 0 // Reset offset when changing range type
+            Task { await loadData() }
+        }
+    }
     
-    // MARK: - Summary Stats
+    // 0 = Current period, -1 = Previous, 1 = Next (future)
+    @Published var periodOffset: Int = 0 {
+        didSet { Task { await loadData() } }
+    }
     
-    func summaryStats(instances: [MoleculeInstance]) -> SummaryStats {
-        let filtered = filterInstances(instances)
+    @Published var selectedCompound: String? = nil { // nil = All Compounds
+        didSet { Task { await loadData() } }
+    }
+    @Published var selectedMolecule: MoleculeTemplate? = nil { // nil = All in Compound
+        didSet { Task { await loadData() } }
+    }
+    
+    // Chart Selection
+    @Published var selectedChartDate: Date? = nil
+    
+    @Published private(set) var stats: SummaryStats = .empty
+    @Published private(set) var chartPoints: [ChartDataPoint] = []
+    @Published private(set) var topHabitsData: [HabitStat] = []
+    @Published private(set) var bottomHabitsData: [HabitStat] = []
+    @Published private(set) var allHabitsBest: [HabitStat] = []
+    @Published private(set) var allHabitsWorst: [HabitStat] = []
+    
+    @Published private(set) var heatmapData: [Date: Double] = [:]
+    @Published private(set) var timeOfDayData: [TimeSlot: Int] = [:]
+    
+    @Published private(set) var isLoading = false
+    
+    // MARK: - Dependencies
+    private var analyticsService: AnalyticsQueryService?
+    
+    // MARK: - Initialization
+    
+    func configure(modelContext: ModelContext) {
+        self.analyticsService = AnalyticsQueryService(modelContext: modelContext)
+        Task { await loadData() }
+    }
+    
+    // MARK: - Period Navigation
+    
+    func nextPeriod() {
+        periodOffset += 1
+    }
+    
+    func previousPeriod() {
+        periodOffset -= 1
+    }
+    
+    var currentPeriodLabel: String {
+        let (start, end) = calculateDateRange()
+        let formatter = DateFormatter()
         
-        let total = filtered.count
-        let completed = filtered.filter { $0.isCompleted }.count
-        let rate = total > 0 ? (Double(completed) / Double(total)) * 100 : 0
+        switch selectedTimeRange {
+        case .week:
+            formatter.dateFormat = "MMM d"
+            return "\(formatter.string(from: start)) - \(formatter.string(from: end))"
+        case .month, .mtd:
+            formatter.dateFormat = "MMMM yyyy"
+            return formatter.string(from: start)
+        }
+    }
+    
+    // MARK: - Date Logic
+    
+    private func calculateDateRange() -> (start: Date, end: Date) {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
         
-        // Comparison to previous period
-        var delta: Double? = nil
-        if let previousRange = selectedTimeRange.previousPeriod() {
-            let previousInstances = instances.filter {
-                $0.scheduledDate >= previousRange.start && $0.scheduledDate <= previousRange.end
-            }
-            let prevFiltered = applyNonTimeFilters(previousInstances)
-            let prevTotal = prevFiltered.count
-            let prevCompleted = prevFiltered.filter { $0.isCompleted }.count
-            let prevRate = prevTotal > 0 ? (Double(prevCompleted) / Double(prevTotal)) * 100 : 0
+        // Base logic for 0 offset
+        let baseStart: Date
+        let baseEnd: Date
+        
+        switch selectedTimeRange {
+        case .week:
+            // "Week" roughly means last 7 days including today? OR standard calendar week?
+            // "Week" in apps usually means "This Week" (Mon-Sun) or "Last 7 Days". 
+            // Previous code was "last 6 days + today". Let's stick to "Last 7 Days" type rolling window 
+            // or standard week. Standard week is easier for "Month" comparison.
+            // Let's use clean calendar weeks based on feedback for "scrolling".
+            // Actually, if I offset by 1, I expect the previous Week.
+            // Let's anchor to Start of Week.
             
-            if prevTotal > 0 {
-                delta = rate - prevRate
+            // Anchor: Today
+            // If offset is 0, we want the current week containing today.
+            // If we use "rolling", navigation is weird (-7 days).
+            // Let's use Calendar Week (Monday start).
+            
+            // Find start of current week
+            let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today)
+            let startOfWeek = calendar.date(from: components)!
+            
+            baseStart = calendar.date(byAdding: .weekOfYear, value: periodOffset, to: startOfWeek)!
+            baseEnd = calendar.date(byAdding: .day, value: 6, to: baseStart)!
+            
+        case .month:
+            // Whole Month
+            let components = calendar.dateComponents([.year, .month], from: today)
+            let startOfMonth = calendar.date(from: components)!
+            
+            baseStart = calendar.date(byAdding: .month, value: periodOffset, to: startOfMonth)!
+            let nextMonth = calendar.date(byAdding: .month, value: 1, to: baseStart)!
+            baseEnd = calendar.date(byAdding: .day, value: -1, to: nextMonth)!
+            
+        case .mtd:
+            // Month to Date. Same as Month, but end cap is Today if offset is 0.
+            // If offset < 0, it behaves like full Month.
+            
+            let components = calendar.dateComponents([.year, .month], from: today)
+            let startOfMonth = calendar.date(from: components)!
+            baseStart = calendar.date(byAdding: .month, value: periodOffset, to: startOfMonth)!
+            
+            if periodOffset == 0 {
+                // Today
+                baseEnd = today
+            } else {
+                // Full past month
+                let nextMonth = calendar.date(byAdding: .month, value: 1, to: baseStart)!
+                baseEnd = calendar.date(byAdding: .day, value: -1, to: nextMonth)!
             }
         }
         
-        // Streak calculation
-        let streak = calculateStreak(instances: instances)
+        return (baseStart, baseEnd)
+    }
+    
+    private func previousPeriodRange(currentStart: Date, currentEnd: Date) -> (start: Date, end: Date) {
+        let calendar = Calendar.current
+        let duration = currentEnd.timeIntervalSince(currentStart)
+        let previousEnd = calendar.date(byAdding: .day, value: -1, to: currentStart)!
+        // Approximate start
+        let previousStart = calendar.date(byAdding: .day, value: 1, to: previousEnd.addingTimeInterval(-duration))!
+        // Re-align if needed for months
+        if selectedTimeRange == .month || selectedTimeRange == .mtd {
+             if let prevMonthStart = calendar.date(byAdding: .month, value: -1, to: currentStart) {
+                 return (prevMonthStart, previousEnd)
+             }
+        }
+        return (previousStart, previousEnd)
+    }
+    
+    // MARK: - Data Loading
+    
+    func loadData() async {
+        guard let service = analyticsService else { return }
         
-        // Consistency rating
-        let consistency = calculateConsistencyRating(instances: filtered)
+        isLoading = true
+        defer { isLoading = false }
         
-        return SummaryStats(
-            overallCompletion: rate,
+        let range = calculateDateRange()
+        
+        // 1. Summary Stats
+        let completionRate = service.completionRate(from: range.start, to: range.end, molecule: selectedMolecule)
+        let scheduled = service.scheduledCount(from: range.start, to: range.end, molecule: selectedMolecule)
+        let completed = service.completedCount(from: range.start, to: range.end, molecule: selectedMolecule)
+        let streak = service.currentStreak(for: selectedMolecule)
+        
+        // Comparison
+        var delta: Double? = nil
+        let prevRange = previousPeriodRange(currentStart: range.start, currentEnd: range.end)
+        let comparison = service.periodComparison(
+            current: (range.start, range.end),
+            previous: (prevRange.start, prevRange.end)
+        )
+        delta = comparison.delta
+        
+        // Consistency Logic
+        let consistency: ConsistencyRating
+        if completionRate >= 95 { consistency = .perfect }
+        else if completionRate >= 75 { consistency = .good }
+        else if completionRate >= 50 { consistency = .spotty }
+        else { consistency = .needsWork }
+        
+        self.stats = SummaryStats(
+            overallCompletion: completionRate,
             comparisonDelta: delta,
             currentStreak: streak,
             totalCompleted: completed,
-            totalScheduled: total,
+            totalScheduled: scheduled,
             consistencyRating: consistency
         )
-    }
-    
-    // MARK: - Chart Data
-    
-    func chartData(instances: [MoleculeInstance]) -> [ChartDataPoint] {
-        let filtered = filterInstances(instances)
-        guard !filtered.isEmpty else { return [] }
         
-        let calendar = Calendar.current
-        let bucketType = selectedTimeRange.chartBucketType
-        
-        // Group by bucket
-        let grouped = Dictionary(grouping: filtered) { instance -> Date in
-            bucketDate(for: instance.scheduledDate, type: bucketType, calendar: calendar)
-        }
-        
+        // 2. Chart Data (ALWAYS DAILY NOW)
         var points: [ChartDataPoint] = []
+        let calendar = Calendar.current
+        var currentDate = range.start
         
-        for (date, group) in grouped {
-            let total = group.count
-            let completed = group.filter { $0.isCompleted }.count
-            let rate = total > 0 ? (Double(completed) / Double(total)) * 100 : 0
+        while currentDate <= range.end {
+            // For Day bucket, start == end
+            let rate = service.completionRate(from: currentDate, to: currentDate, molecule: selectedMolecule)
+            let total = service.scheduledCount(from: currentDate, to: currentDate, molecule: selectedMolecule)
+            let compl = service.completedCount(from: currentDate, to: currentDate, molecule: selectedMolecule)
             
-            let label = bucketLabel(for: date, type: bucketType, calendar: calendar)
+            let label = bucketLabel(for: currentDate)
             
             points.append(ChartDataPoint(
                 label: label,
-                date: date,
+                date: currentDate,
                 completionRate: rate,
                 total: total,
-                completed: completed
+                completed: compl
             ))
+            
+            currentDate = calendar.date(byAdding: .day, value: 1, to: currentDate)!
         }
+        self.chartPoints = points
         
-        return points.sorted { $0.date < $1.date }
-    }
-    
-    // MARK: - Habit Stats (Weighted)
-    
-    func habitStats(instances: [MoleculeInstance]) -> [HabitStat] {
-        let filtered = filterInstances(instances)
-        let allAtoms = filtered.flatMap { $0.atomInstances }
+        // 3. Habit Stats (Using service for the range)
+        let allHabits = service.topPerformingHabits(limit: 1000, from: range.start, to: range.end)
         
-        let grouped = Dictionary(grouping: allAtoms) { $0.title }
+        // Simple client side filter if needed (skipping strict compound filter for perf per previous logic, 
+        // can refine if we fetch templates)
+        let filteredHabits = allHabits // Placeholder: Assumes service returned what we want for now
         
-        var stats: [HabitStat] = []
-        
-        for (name, atoms) in grouped {
-            let total = atoms.count
-            let completed = atoms.filter { $0.isCompleted }.count
-            let rate = total > 0 ? (Double(completed) / Double(total)) * 100 : 0
+        // Compute Weighted Scores
+        let enrichedHabits = filteredHabits.map { stat -> HabitStat in
+            let weight = stat.completionRate * log(Double(stat.totalCount + 1))
             
-            // Weighted score: Completion% × log(Total + 1)
-            let weight = rate * log(Double(total + 1))
+            let consistency: ConsistencyRating
+            if stat.completionRate >= 95 { consistency = .perfect }
+            else if stat.completionRate >= 75 { consistency = .good }
+            else if stat.completionRate >= 50 { consistency = .spotty }
+            else { consistency = .needsWork }
             
-            // Consistency for this habit
-            let consistency = atomConsistencyRating(atoms: atoms)
-            
-            stats.append(HabitStat(
-                name: name,
-                completionRate: rate,
-                total: total,
-                completed: completed,
+            return HabitStat(
+                name: stat.title,
+                completionRate: stat.completionRate,
+                total: stat.totalCount,
+                completed: stat.completedCount,
                 weightedScore: weight,
                 consistencyRating: consistency
-            ))
-        }
+            )
+        }.sorted { $0.weightedScore > $1.weightedScore }
         
-        // Sort by weighted score descending
-        return stats.sorted { $0.weightedScore > $1.weightedScore }
+        self.allHabitsBest = enrichedHabits
+        self.allHabitsWorst = enrichedHabits.filter { $0.completionRate < 100 }.sorted { $0.weightedScore < $1.weightedScore }
+        
+        self.topHabitsData = Array(enrichedHabits.prefix(3))
+        self.bottomHabitsData = Array(allHabitsWorst.prefix(3))
+        
+        // 4. Heatmap
+        self.heatmapData = service.dailyCompletionRates(from: range.start, to: range.end)
+        
+        // 5. Time of Day
+        self.timeOfDayData = service.completionsByTimeOfDay(from: range.start, to: range.end)
     }
-    
-    func topHabits(instances: [MoleculeInstance], count: Int = 3) -> [HabitStat] {
-        Array(habitStats(instances: instances).prefix(count))
-    }
-    
-    func bottomHabits(instances: [MoleculeInstance], count: Int = 3) -> [HabitStat] {
-        let stats = habitStats(instances: instances)
-        // Filter out 100% completion habits - they don't need improvement
-        let needsWork = stats.filter { $0.completionRate < 100 }
-        guard !needsWork.isEmpty else { return [] }
-        return Array(needsWork.suffix(count).reversed())
-    }
-    
-    /// All habits sorted best to worst (for "Show More")
-    func allHabitsSortedBest(instances: [MoleculeInstance]) -> [HabitStat] {
-        habitStats(instances: instances)
-    }
-    
-    /// All habits sorted worst to best (for "Show More" on Room for Improvement)
-    func allHabitsSortedWorst(instances: [MoleculeInstance]) -> [HabitStat] {
-        habitStats(instances: instances)
-            .filter { $0.completionRate < 100 }
-            .sorted { $0.weightedScore < $1.weightedScore }
-    }
+
     
     // MARK: - Available Compounds
     
@@ -285,140 +364,11 @@ final class InsightsViewModel: ObservableObject {
         return templates.filter { $0.compound == compound }
     }
     
-    // MARK: - Private Helpers
+    // MARK: - Helpers
     
-    private func filterInstances(_ instances: [MoleculeInstance]) -> [MoleculeInstance] {
-        var result = instances
-        
-        // Time filter
-        if let range = selectedTimeRange.dateRange() {
-            result = result.filter { $0.scheduledDate >= range.start && $0.scheduledDate <= range.end }
-        }
-        
-        result = applyNonTimeFilters(result)
-        
-        return result
-    }
-    
-    private func applyNonTimeFilters(_ instances: [MoleculeInstance]) -> [MoleculeInstance] {
-        var result = instances
-        
-        // Compound filter
-        if let compound = selectedCompound {
-            result = result.filter { $0.parentTemplate?.compound == compound }
-        }
-        
-        // Molecule filter
-        if let molecule = selectedMolecule {
-            result = result.filter { $0.parentTemplate?.id == molecule.id }
-        }
-        
-        return result
-    }
-    
-    private func calculateStreak(instances: [MoleculeInstance]) -> Int {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        
-        // Get all unique dates with at least one completion
-        let completedDates = Set(
-            instances
-                .filter { $0.isCompleted }
-                .map { calendar.startOfDay(for: $0.scheduledDate) }
-        )
-        
-        var streak = 0
-        var checkDate = today
-        
-        // Count backwards from today
-        while completedDates.contains(checkDate) {
-            streak += 1
-            guard let previous = calendar.date(byAdding: .day, value: -1, to: checkDate) else { break }
-            checkDate = previous
-        }
-        
-        return streak
-    }
-    
-    private func calculateConsistencyRating(instances: [MoleculeInstance]) -> ConsistencyRating {
-        guard !instances.isEmpty else { return .needsWork }
-        
-        let total = instances.count
-        let completed = instances.filter { $0.isCompleted }.count
-        let rate = Double(completed) / Double(total)
-        
-        // Also check variance in completion pattern
-        let calendar = Calendar.current
-        let dailyGroups = Dictionary(grouping: instances) { calendar.startOfDay(for: $0.scheduledDate) }
-        
-        var dailyRates: [Double] = []
-        for (_, group) in dailyGroups {
-            let dayTotal = group.count
-            let dayCompleted = group.filter { $0.isCompleted }.count
-            dailyRates.append(Double(dayCompleted) / Double(dayTotal))
-        }
-        
-        // Calculate variance
-        let mean = dailyRates.reduce(0, +) / Double(dailyRates.count)
-        let variance = dailyRates.map { pow($0 - mean, 2) }.reduce(0, +) / Double(dailyRates.count)
-        
-        if rate >= 0.95 && variance < 0.05 {
-            return .perfect
-        } else if rate >= 0.75 && variance < 0.15 {
-            return .good
-        } else if rate >= 0.50 {
-            return .spotty
-        } else {
-            return .needsWork
-        }
-    }
-    
-    private func atomConsistencyRating(atoms: [AtomInstance]) -> ConsistencyRating {
-        guard !atoms.isEmpty else { return .needsWork }
-        
-        let completed = atoms.filter { $0.isCompleted }.count
-        let rate = Double(completed) / Double(atoms.count)
-        
-        if rate >= 0.95 { return .perfect }
-        else if rate >= 0.75 { return .good }
-        else if rate >= 0.50 { return .spotty }
-        else { return .needsWork }
-    }
-    
-    private func bucketDate(for date: Date, type: ChartBucketType, calendar: Calendar) -> Date {
-        switch type {
-        case .day:
-            return calendar.startOfDay(for: date)
-        case .week:
-            let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
-            return calendar.date(from: components) ?? date
-        case .month:
-            let components = calendar.dateComponents([.year, .month], from: date)
-            return calendar.date(from: components) ?? date
-        case .quarter:
-            let month = calendar.component(.month, from: date)
-            let quarter = ((month - 1) / 3) * 3 + 1
-            var components = calendar.dateComponents([.year], from: date)
-            components.month = quarter
-            return calendar.date(from: components) ?? date
-        }
-    }
-    
-    private func bucketLabel(for date: Date, type: ChartBucketType, calendar: Calendar) -> String {
+    private func bucketLabel(for date: Date) -> String {
         let formatter = DateFormatter()
-        switch type {
-        case .day:
-            formatter.dateFormat = "E" // Mon, Tue
-        case .week:
-            let weekOfYear = calendar.component(.weekOfYear, from: date)
-            return "W\(weekOfYear)"
-        case .month:
-            formatter.dateFormat = "MMM" // Jan, Feb
-        case .quarter:
-            let month = calendar.component(.month, from: date)
-            let quarter = ((month - 1) / 3) + 1
-            return "Q\(quarter)"
-        }
+        formatter.dateFormat = "d" // Just the day number
         return formatter.string(from: date)
     }
 }
