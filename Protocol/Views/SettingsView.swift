@@ -57,6 +57,9 @@ struct SettingsView: View {
     @AppStorage("defaultReminderOffset") private var defaultReminderOffset: Int = 15
     @AppStorage("showAppIconBadge") private var showAppIconBadge: Bool = true
     @AppStorage("backupFrequency") private var backupFrequency: BackupFrequency = .daily
+    @AppStorage("celebrationIntensity") private var celebrationIntensity: String = CelebrationIntensity.normal.rawValue
+    @AppStorage("autoCleanupEnabled") private var autoCleanupEnabled: Bool = true
+    @AppStorage("autoCleanupDays") private var autoCleanupDays: Int = 30
     
     // Alert States
     @State private var showingResyncConfirmation = false
@@ -169,6 +172,12 @@ struct SettingsView: View {
                     )) {
                         Label("Haptic Feedback", systemImage: "iphone.radiowaves.left.and.right")
                     }
+                    
+                    Picker("Intensity", selection: $celebrationIntensity) {
+                        ForEach(CelebrationIntensity.allCases) { level in
+                            Text(level.rawValue).tag(level.rawValue)
+                        }
+                    }
                 } header: {
                     Label("Celebrations", systemImage: "party.popper")
                 } footer: {
@@ -262,9 +271,12 @@ struct SettingsView: View {
                         }
                         .onDelete(perform: deleteBackups)
                     } else {
-                        Text("No backups found")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        ContentUnavailableView {
+                            Label("No Backups", systemImage: "externaldrive")
+                        } description: {
+                            Text("Create a backup to protect your data.")
+                        }
+                        .frame(maxHeight: 120)
                     }
                 } header: {
                     HStack {
@@ -319,6 +331,9 @@ struct SettingsView: View {
                     Text("Import habits in bulk or view data operation logs.")
                 }
                 
+                // MARK: - Archive Cleanup section removed until files are added to Xcode project
+                // See: Services/ArchiveCleanupService.swift
+                
                 // MARK: - Section 6: Danger Zone
                 Section {
                     NavigationLink {
@@ -328,10 +343,16 @@ struct SettingsView: View {
                             .foregroundStyle(.orange)
                     }
                     
-                    Button(role: .destructive) {
-                        showingNukeConfirmation = true
+                    NavigationLink {
+                        ArchivedMoleculesView()
                     } label: {
-                        Label("Nuke Data", systemImage: "trash")
+                        Label("Archived Molecules", systemImage: "archivebox")
+                    }
+                    
+                    NavigationLink {
+                        DataManagementView()
+                    } label: {
+                        Label("Data Management", systemImage: "externaldrive.badge.xmark")
                             .foregroundStyle(.red)
                     }
                 } header: {
@@ -342,7 +363,7 @@ struct SettingsView: View {
                             .foregroundStyle(.red)
                     }
                 } footer: {
-                    Text("Cleanup removes 'Untitled' orphan instances. Nuke permanently deletes ALL data.")
+                    Text("Recovery tools and destructive data operations.")
                         .foregroundStyle(.red.opacity(0.8))
                 }
             }
@@ -351,7 +372,7 @@ struct SettingsView: View {
             .onAppear {
                 Task {
                     await notificationManager.checkAuthorization()
-                    loadBackups() // Load backups when view appears
+                    loadBackups()
                 }
             }
             
@@ -411,7 +432,7 @@ struct SettingsView: View {
                     }
                 }
             } message: {
-                Text("This will REPLACE ALL current data with the backup. This action cannot be undone. Are you sure?")
+                Text("This will REPLACE ALL current data with the backup. A safety backup will be created first. Are you sure?")
             }
             .alert("Restore Complete", isPresented: $showingRestoreSuccess) {
                 Button("OK", role: .cancel) { }
@@ -419,15 +440,7 @@ struct SettingsView: View {
                 Text("Your data has been restored from the backup.")
             }
 
-            // Nuke Data
-            .alert("Nuke All Data?", isPresented: $showingNukeConfirmation) {
-                Button("Cancel", role: .cancel) { }
-                Button("Nuke Everything", role: .destructive) {
-                    nukeAllData()
-                }
-            } message: {
-                Text("WARNING: This will permanently delete ALL molecules, history, and settings. This cannot be undone.")
-            }
+            // Nuke Success (triggered from DataManagementView)
             .alert("Data Nuked", isPresented: $showingNukeSuccess) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -561,6 +574,16 @@ struct SettingsView: View {
     private func restoreBackup(_ url: URL) {
         Task {
             do {
+                // Create safety backup before restore
+                do {
+                    _ = try await backupManager.createBackup(context: modelContext)
+                    print("✅ Safety backup created before restore")
+                } catch {
+                    print("⚠️ Could not create safety backup: \(error)")
+                    // Continue anyway - user confirmed they want to restore
+                }
+                
+                // Perform restore
                 try await backupManager.restore(from: url, context: modelContext)
                 
                 // Audit log
@@ -570,6 +593,7 @@ struct SettingsView: View {
                     additionalInfo: "Restored from backup: \(url.lastPathComponent)"
                 )
                 
+                loadBackups() // Refresh backup list to show new safety backup
                 showingRestoreSuccess = true
                 
             } catch {
@@ -620,6 +644,234 @@ struct SettingsView: View {
             
         } catch {
             print("❌ Failed to nuke data: \(error)")
+        }
+    }
+}
+
+// MARK: - Data Management View (Nested Nuke)
+
+struct DataManagementView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    
+    // Confirmation state
+    @State private var confirmText = ""
+    @State private var buttonEnabled = false
+    @State private var countdown = 3
+    @State private var timer: Timer?
+    
+    // Results
+    @State private var showingNukeSuccess = false
+    @State private var isNuking = false
+    
+    var body: some View {
+        List {
+            // MARK: - Warning Section
+            Section {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.title)
+                            .foregroundStyle(.red)
+                        Text("Permanent Data Destruction")
+                            .font(.title3)
+                            .fontWeight(.bold)
+                            .foregroundStyle(.red)
+                    }
+                    
+                    Text("This action will permanently and irreversibly destroy:")
+                        .font(.callout)
+                        .fontWeight(.semibold)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        DestructionItem(icon: "atom", text: "ALL your molecules (habits)")
+                        DestructionItem(icon: "calendar", text: "ALL your scheduled instances")
+                        DestructionItem(icon: "checkmark.circle", text: "ALL your completion history")
+                        DestructionItem(icon: "list.bullet", text: "ALL your atoms (tasks)")
+                        DestructionItem(icon: "bell", text: "ALL scheduled notifications")
+                        DestructionItem(icon: "gearshape", text: "App settings and preferences")
+                    }
+                    
+                    Text("A safety backup will be created before deletion, but this should only be used as a last resort.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                }
+                .padding(.vertical, 8)
+            } header: {
+                Label("Warning", systemImage: "exclamationmark.octagon.fill")
+                    .foregroundStyle(.red)
+            }
+            
+            // MARK: - Confirmation Section
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("To proceed, type DELETE in the field below:")
+                        .font(.callout)
+                    
+                    TextField("Type DELETE", text: $confirmText)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .padding()
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(confirmText == "DELETE" ? Color.red : Color.clear, lineWidth: 2)
+                        )
+                }
+            } header: {
+                Label("Confirmation Required", systemImage: "lock.fill")
+            }
+            
+            // MARK: - Action Section
+            Section {
+                Button(role: .destructive) {
+                    Task {
+                        await performNuke()
+                    }
+                } label: {
+                    HStack {
+                        Spacer()
+                        if isNuking {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                        } else {
+                            Image(systemName: "trash.fill")
+                            Text("Nuke All Data")
+                            if !buttonEnabled {
+                                Text("(\(countdown)s)")
+                                    .foregroundStyle(.white.opacity(0.7))
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                }
+                .disabled(!buttonEnabled || confirmText != "DELETE" || isNuking)
+                .listRowBackground(
+                    (buttonEnabled && confirmText == "DELETE" && !isNuking)
+                    ? Color.red
+                    : Color.gray.opacity(0.3)
+                )
+                .foregroundStyle(.white)
+                .fontWeight(.semibold)
+            } footer: {
+                if !buttonEnabled {
+                    Text("Button will be enabled in \(countdown) seconds...")
+                        .foregroundStyle(.secondary)
+                } else if confirmText != "DELETE" {
+                    Text("Type DELETE above to enable the button.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("⚠️ This action cannot be undone!")
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+        .navigationTitle("Data Management")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            startCountdown()
+        }
+        .onDisappear {
+            timer?.invalidate()
+        }
+        .alert("Data Nuked", isPresented: $showingNukeSuccess) {
+            Button("OK") {
+                dismiss()
+            }
+        } message: {
+            Text("All data has been permanently erased. A safety backup was created.")
+        }
+    }
+    
+    // MARK: - Private Methods
+    
+    private func startCountdown() {
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            if countdown > 1 {
+                countdown -= 1
+            } else {
+                buttonEnabled = true
+                timer?.invalidate()
+            }
+        }
+    }
+    
+    private func performNuke() async {
+        isNuking = true
+        
+        // 1. Create safety backup first
+        do {
+            _ = try await BackupManager.shared.createBackup(context: modelContext)
+            print("✅ Safety backup created before nuke")
+        } catch {
+            print("⚠️ Could not create safety backup: \(error)")
+            // Continue anyway - user has triple-confirmed
+        }
+        
+        // 2. Perform the nuke
+        do {
+            // Delete all MoleculeInstances first (due to relationships)
+            let instanceDescriptor = FetchDescriptor<MoleculeInstance>()
+            let instances = try modelContext.fetch(instanceDescriptor)
+            for instance in instances {
+                NotificationManager.shared.cancelNotification(for: instance)
+                modelContext.delete(instance)
+            }
+            
+            // Delete all MoleculeTemplates
+            let templateDescriptor = FetchDescriptor<MoleculeTemplate>()
+            let templates = try modelContext.fetch(templateDescriptor)
+            for template in templates {
+                modelContext.delete(template)
+            }
+            
+            // Save changes
+            try modelContext.save()
+            
+            // Cancel all remaining notifications
+            NotificationManager.shared.cancelAllNotifications()
+            
+            // Reset UserDefaults
+            UserDefaults.standard.removeObject(forKey: "hasSeenOnboarding")
+            
+            // Audit log
+            await AuditLogger.shared.logBulkDelete(
+                entityType: .moleculeTemplate,
+                count: templates.count,
+                additionalInfo: "Nuclear option executed. Deleted \(templates.count) templates and \(instances.count) instances."
+            )
+            
+            // Haptic feedback
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+            
+            isNuking = false
+            showingNukeSuccess = true
+            
+        } catch {
+            print("❌ Failed to nuke data: \(error)")
+            isNuking = false
+        }
+    }
+}
+
+// MARK: - Destruction Item Component
+
+struct DestructionItem: View {
+    let icon: String
+    let text: String
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundStyle(.red)
+                .frame(width: 20)
+            Text(text)
+                .font(.callout)
         }
     }
 }
@@ -776,17 +1028,6 @@ struct WorkflowStep: View {
     }
 }
 
-// MARK: - Share Sheet (UIKit Bridge)
-
-struct ShareSheet: UIViewControllerRepresentable {
-    let activityItems: [Any]
-    
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
-    }
-    
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
 
 // MARK: - Preview
 
