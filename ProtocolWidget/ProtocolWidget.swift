@@ -7,9 +7,10 @@
 
 import WidgetKit
 import SwiftUI
-import SwiftData
+import SQLite3
 import AppIntents
 
+// Lightweight molecule struct for widget display (no SwiftData)
 struct SimpleMolecule: Identifiable {
     let id: UUID
     let title: String
@@ -19,54 +20,126 @@ struct SimpleMolecule: Identifiable {
 }
 
 struct Provider: TimelineProvider {
+    // App Group for shared database
+    private static let appGroupIdentifier = "group.com.Toofan.Toofanprotocol.shared"
+    
     func placeholder(in context: Context) -> SimpleEntry {
         SimpleEntry(date: Date(), molecules: [])
     }
 
     func getSnapshot(in context: Context, completion: @escaping (SimpleEntry) -> ()) {
-        Task { @MainActor in
-            let molecules = fetchKeyMolecules()
-            let entry = SimpleEntry(date: Date(), molecules: molecules)
-            completion(entry)
-        }
+        let molecules = fetchMoleculesWithSQLite()
+        let entry = SimpleEntry(date: Date(), molecules: molecules)
+        completion(entry)
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<Entry>) -> ()) {
-        Task { @MainActor in
-            let molecules = fetchKeyMolecules()
-            let entry = SimpleEntry(date: Date(), molecules: molecules)
-            // Reload after 15 minutes or when data changes
-            let reloadDate = Calendar.current.date(byAdding: .minute, value: 15, to: Date())!
-            let timeline = Timeline(entries: [entry], policy: .after(reloadDate))
-            completion(timeline)
-        }
+        let molecules = fetchMoleculesWithSQLite()
+        let entry = SimpleEntry(date: Date(), molecules: molecules)
+        // Reload after 15 minutes
+        let reloadDate = Calendar.current.date(byAdding: .minute, value: 15, to: Date())!
+        let timeline = Timeline(entries: [entry], policy: .after(reloadDate))
+        completion(timeline)
     }
     
-    @MainActor
-    private func fetchKeyMolecules() -> [SimpleMolecule] {
-        let context = DataController.shared.container.mainContext
+    // MARK: - Lightweight SQLite Fetch (No SwiftData)
+    
+    /// Fetches today's molecules directly from SQLite without loading SwiftData stack
+    private func fetchMoleculesWithSQLite() -> [SimpleMolecule] {
+        guard let dbURL = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier)?
+            .appendingPathComponent("Protocol.sqlite") else {
+            return []
+        }
+        
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dbURL.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            return []
+        }
+        defer { sqlite3_close(db) }
+        
+        var molecules: [SimpleMolecule] = []
+        
+        // Get today's date range as Apple's reference date (seconds since 2001-01-01)
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: Date())
         let todayEnd = calendar.date(byAdding: .day, value: 1, to: todayStart)!
         
-        let descriptor = FetchDescriptor<MoleculeInstance>(
-            predicate: #Predicate<MoleculeInstance> {
-                $0.scheduledDate >= todayStart && $0.scheduledDate < todayEnd
-            },
-            sortBy: [SortDescriptor(\.scheduledDate)]
-        )
+        // Convert to Apple's Core Data reference date (2001-01-01)
+        let referenceDate = Date(timeIntervalSinceReferenceDate: 0)
+        let startInterval = todayStart.timeIntervalSince(referenceDate)
+        let endInterval = todayEnd.timeIntervalSince(referenceDate)
         
-        guard let instances = try? context.fetch(descriptor) else { return [] }
+        // SQL: Join instances with templates to get title and compound
+        let sql = """
+            SELECT 
+                i.ZID,
+                COALESCE(t.ZTITLE, 'Unknown') as title,
+                i.ZSCHEDULEDDATE,
+                i.ZISCOMPLETED,
+                t.ZCOMPOUND
+            FROM ZMOLECULEINSTANCE i
+            LEFT JOIN ZMOLECULETEMPLATE t ON i.ZPARENTTEMPLATE = t.Z_PK
+            WHERE i.ZSCHEDULEDDATE >= ? AND i.ZSCHEDULEDDATE < ?
+              AND (i.ZISARCHIVED IS NULL OR i.ZISARCHIVED = 0)
+            ORDER BY i.ZSCHEDULEDDATE ASC
+            LIMIT 10
+            """
         
-        return instances.map { instance in
-            SimpleMolecule(
-                id: instance.id,
-                title: instance.parentTemplate?.title ?? "Unknown",
-                time: instance.scheduledDate,
-                isCompleted: instance.isCompleted,
-                compound: instance.parentTemplate?.compound
-            )
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return []
         }
+        defer { sqlite3_finalize(stmt) }
+        
+        sqlite3_bind_double(stmt, 1, startInterval)
+        sqlite3_bind_double(stmt, 2, endInterval)
+        
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            // Parse UUID from blob or string
+            var uuid: UUID = UUID()
+            if let idBlob = sqlite3_column_blob(stmt, 0) {
+                let idLength = sqlite3_column_bytes(stmt, 0)
+                if idLength == 16 {
+                    // UUID stored as 16-byte blob
+                    let data = Data(bytes: idBlob, count: Int(idLength))
+                    uuid = UUID(uuid: data.withUnsafeBytes { $0.load(as: uuid_t.self) })
+                }
+            }
+            
+            // Title
+            let title: String
+            if let titleCStr = sqlite3_column_text(stmt, 1) {
+                title = String(cString: titleCStr)
+            } else {
+                title = "Unknown"
+            }
+            
+            // Scheduled date (stored as TimeIntervalSinceReferenceDate)
+            let scheduledInterval = sqlite3_column_double(stmt, 2)
+            let scheduledDate = Date(timeIntervalSinceReferenceDate: scheduledInterval)
+            
+            // isCompleted (SQLite stores booleans as 0/1)
+            let isCompleted = sqlite3_column_int(stmt, 3) != 0
+            
+            // Compound (optional)
+            let compound: String?
+            if let compoundCStr = sqlite3_column_text(stmt, 4) {
+                compound = String(cString: compoundCStr)
+            } else {
+                compound = nil
+            }
+            
+            molecules.append(SimpleMolecule(
+                id: uuid,
+                title: title,
+                time: scheduledDate,
+                isCompleted: isCompleted,
+                compound: compound
+            ))
+        }
+        
+        return molecules
     }
 }
 
