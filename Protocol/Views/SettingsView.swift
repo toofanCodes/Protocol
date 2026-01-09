@@ -513,7 +513,7 @@ struct SettingsView: View {
             shareItem = ShareItem(items: [jsonData])
             
         } catch {
-            print("❌ Export failed: \(error)")
+            AppLogger.backup.error("Export failed: \(error.localizedDescription)")
         }
     }
     
@@ -557,7 +557,7 @@ struct SettingsView: View {
                 loadBackups()
                 showingBackupSuccess = true
             } catch {
-                print("Backup failed: \(error)")
+                AppLogger.backup.error("Backup failed: \(error.localizedDescription)")
             }
             isBackingUp = false
         }
@@ -577,9 +577,9 @@ struct SettingsView: View {
                 // Create safety backup before restore
                 do {
                     _ = try await backupManager.createBackup(context: modelContext)
-                    print("✅ Safety backup created before restore")
+                    AppLogger.backup.info("Safety backup created before restore")
                 } catch {
-                    print("⚠️ Could not create safety backup: \(error)")
+                    AppLogger.backup.warning("Could not create safety backup: \(error.localizedDescription)")
                     // Continue anyway - user confirmed they want to restore
                 }
                 
@@ -597,7 +597,7 @@ struct SettingsView: View {
                 showingRestoreSuccess = true
                 
             } catch {
-                print("Restore failed: \(error)")
+                AppLogger.backup.error("Restore failed: \(error.localizedDescription)")
             }
         }
     }
@@ -643,7 +643,7 @@ struct SettingsView: View {
             showingNukeSuccess = true
             
         } catch {
-            print("❌ Failed to nuke data: \(error)")
+            AppLogger.data.error("Failed to nuke data: \(error.localizedDescription)")
         }
     }
 }
@@ -806,9 +806,9 @@ struct DataManagementView: View {
         // 1. Create safety backup first
         do {
             _ = try await BackupManager.shared.createBackup(context: modelContext)
-            print("✅ Safety backup created before nuke")
+            AppLogger.backup.info("Safety backup created before nuke")
         } catch {
-            print("⚠️ Could not create safety backup: \(error)")
+            AppLogger.backup.warning("Could not create safety backup: \(error.localizedDescription)")
             // Continue anyway - user has triple-confirmed
         }
         
@@ -853,7 +853,7 @@ struct DataManagementView: View {
             showingNukeSuccess = true
             
         } catch {
-            print("❌ Failed to nuke data: \(error)")
+            AppLogger.data.error("Failed to nuke data: \(error.localizedDescription)")
             isNuking = false
         }
     }

@@ -9,6 +9,7 @@ import Foundation
 import SwiftData
 import UniformTypeIdentifiers
 import UIKit
+import CryptoKit
 
 // MARK: - Backup Models
 
@@ -17,6 +18,14 @@ struct AppBackup: Codable {
     let metadata: BackupMetadata
     let moleculeTemplates: [MoleculeTemplateData]
     let moleculeInstances: [MoleculeInstanceData]
+}
+
+/// A container for encrypted backup data
+struct EncryptedBackupContainer: Codable {
+    let version: Int
+    let salt: Data
+    let nonce: Data
+    let ciphertext: Data
 }
 
 struct BackupMetadata: Codable {
@@ -216,7 +225,8 @@ final class BackupManager: ObservableObject {
     }
     
     /// Creates a complete backup of the current data context
-    func createBackup(context: ModelContext) async throws -> URL {
+    /// - Parameter password: If provided, the backup will be encrypted using AES-GCM.
+    func createBackup(context: ModelContext, password: String? = nil) async throws -> URL {
         isBackingUp = true
         defer { isBackingUp = false }
         
@@ -250,8 +260,20 @@ final class BackupManager: ObservableObject {
         encoder.outputFormatting = .prettyPrinted
         let data = try encoder.encode(backup)
         
-        // 4. Save to file
-        let filename = "backup_\(formatDate(Date())).json"
+        // 4. Encrypt if password provided
+        let finalData: Data
+        let fileExtension: String
+        
+        if let password = password, !password.isEmpty {
+            finalData = try encrypt(data: data, password: password)
+            fileExtension = "enc"
+        } else {
+            finalData = data
+            fileExtension = "json"
+        }
+        
+        // 5. Save to file
+        let filename = "backup_\(formatDate(Date())).\(fileExtension)"
         let dir = getBackupDirectory()
         let fileURL = dir.appendingPathComponent(filename)
         
@@ -262,7 +284,7 @@ final class BackupManager: ObservableObject {
             }
         }
         
-        try data.write(to: fileURL)
+        try finalData.write(to: fileURL, options: [.completeFileProtection])
         
         // 5. Update state
         lastBackupDate = Date()
@@ -283,7 +305,7 @@ final class BackupManager: ObservableObject {
         
         do {
             let files = try fileManager.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])
-            return files.filter { $0.pathExtension == "json" }
+            return files.filter { $0.pathExtension == "json" || $0.pathExtension == "enc" }
                         .sorted {
                             let date1 = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
                             let date2 = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
@@ -296,13 +318,22 @@ final class BackupManager: ObservableObject {
     }
     
     /// Restores data from a backup file (Destructive)
-    func restore(from url: URL, context: ModelContext) async throws {
+    func restore(from url: URL, context: ModelContext, password: String? = nil) async throws {
         // 1. Load and decode
         // Ensure we have access security scope if needed (mostly for picking external files, but good practice)
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         
-        let data = try Data(contentsOf: url)
+        var data = try Data(contentsOf: url)
+        
+        // Check if encrypted
+        if url.pathExtension == "enc" {
+            guard let password = password, !password.isEmpty else {
+                throw BackupError.passwordRequired
+            }
+            data = try decrypt(data: data, password: password)
+        }
+        
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let backup = try decoder.decode(AppBackup.self, from: data)
@@ -459,5 +490,72 @@ final class BackupManager: ObservableObject {
         #else
         return "Unknown"
         #endif
+    }
+    
+    // MARK: - Encryption Helpers
+    
+    private func encrypt(data: Data, password: String) throws -> Data {
+        let salt = Data.secureRandom(count: 32)
+        let key = deriveKey(password: password, salt: salt)
+        let nonce = AES.GCM.Nonce()
+        
+        let sealedBox = try AES.GCM.seal(data, using: key, nonce: nonce)
+        
+        let container = EncryptedBackupContainer(
+            version: 1,
+            salt: salt,
+            nonce: Data(nonce),
+            ciphertext: sealedBox.ciphertext + sealedBox.tag
+        )
+        
+        return try JSONEncoder().encode(container)
+    }
+    
+    private func decrypt(data: Data, password: String) throws -> Data {
+        let container = try JSONDecoder().decode(EncryptedBackupContainer.self, from: data)
+        let key = deriveKey(password: password, salt: container.salt)
+        
+        let sealedBox = try AES.GCM.SealedBox(combined: container.nonce + container.ciphertext)
+        return try AES.GCM.open(sealedBox, using: key)
+    }
+    
+    private func deriveKey(password: String, salt: Data) -> SymmetricKey {
+        let inputKey = SymmetricKey(data: password.data(using: .utf8)!)
+        return HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: inputKey,
+            salt: salt,
+            info: Data(),
+            outputByteCount: 32
+        )
+    }
+}
+
+enum BackupError: LocalizedError {
+    case passwordRequired
+    case invalidPassword
+    case corruption
+    
+    var errorDescription: String? {
+        switch self {
+        case .passwordRequired: return "Password required for encrypted backup."
+        case .invalidPassword: return "Invalid password or corrupted file."
+        case .corruption: return "Backup file corrupted."
+        }
+    }
+}
+
+// MARK: - Data Extension for Crypto
+
+extension Data {
+    /// Generates cryptographically secure random data
+    static func secureRandom(count: Int) -> Data {
+        var data = Data(count: count)
+        let result = data.withUnsafeMutableBytes {
+            SecRandomCopyBytes(kSecRandomDefault, count, $0.baseAddress!)
+        }
+        if result != errSecSuccess {
+            fatalError("Failed to generate cryptographically secure random bytes")
+        }
+        return data
     }
 }

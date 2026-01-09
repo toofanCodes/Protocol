@@ -89,6 +89,15 @@ struct SettingsHubView: View {
                 subtitle: "Archive & Recovery",
                 color: .red
             )
+            
+            // Cloud Sync
+            SettingsCardLink(
+                destination: CloudSyncSettingsView(),
+                icon: "arrow.triangle.2.circlepath.circle.fill",
+                title: "Cloud Sync",
+                subtitle: "Google Drive",
+                color: .green
+            )
         }
     }
     
@@ -310,14 +319,22 @@ struct BackupsSettingsView: View {
     @State private var availableBackups: [URL] = []
     @State private var showingBackupConfirmation = false
     @State private var showingBackupSuccess = false
+    @State private var showingBackupError = false
     @State private var showingRestoreConfirmation = false
+    @State private var showingRestoreSuccess = false
+    @State private var showingRestoreError = false
+    @State private var restoreErrorMessage = ""
     @State private var backupToRestore: URL?
     @State private var shareItem: ShareItem?
+    @State private var showingDeleteError = false
+    @State private var deleteErrorMessage = ""
+    @State private var passwordInput = "" // For encryption
     
     var body: some View {
         List {
             Section {
                 Button {
+                    passwordInput = "" // Reset
                     showingBackupConfirmation = true
                 } label: {
                     HStack {
@@ -368,32 +385,66 @@ struct BackupsSettingsView: View {
         .navigationTitle("Backups")
         .onAppear { loadBackups() }
         .alert("Create Backup?", isPresented: $showingBackupConfirmation) {
+            SecureField("Password (Optional)", text: $passwordInput)
             Button("Cancel", role: .cancel) { }
             Button("Create") {
                 Task {
-                    try? await backupManager.createBackup(context: modelContext)
-                    loadBackups()
-                    showingBackupSuccess = true
+                    do {
+                        _ = try await backupManager.createBackup(context: modelContext, password: passwordInput)
+                        loadBackups()
+                        showingBackupSuccess = true
+                    } catch {
+                        showingBackupError = true
+                    }
+                    passwordInput = ""
                 }
             }
         }
         .alert("Backup Created", isPresented: $showingBackupSuccess) {
             Button("OK", role: .cancel) { }
         }
+        .alert("Backup Failed", isPresented: $showingBackupError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Failed to create backup. Please try again.")
+        }
         .alert("Restore Backup?", isPresented: $showingRestoreConfirmation) {
+            if let url = backupToRestore, url.pathExtension == "enc" {
+                SecureField("Password Required", text: $passwordInput)
+            }
             Button("Cancel", role: .cancel) { }
             Button("Restore", role: .destructive) {
                 if let url = backupToRestore {
                     Task {
-                        try? await backupManager.restore(from: url, context: modelContext)
+                        do {
+                            try await backupManager.restore(from: url, context: modelContext, password: passwordInput)
+                            showingRestoreSuccess = true
+                        } catch {
+                            restoreErrorMessage = error.localizedDescription
+                            showingRestoreError = true
+                        }
+                        passwordInput = ""
                     }
                 }
             }
         } message: {
             Text("This will replace all current data.")
         }
+        .alert("Restore Complete", isPresented: $showingRestoreSuccess) {
+            Button("OK", role: .cancel) { }
+        }
+        .alert("Restore Failed", isPresented: $showingRestoreError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(restoreErrorMessage)
+        }
         .sheet(item: $shareItem) { item in
             ShareSheet(activityItems: item.items)
+        }
+        .alert("Delete Failed", isPresented: $showingDeleteError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(deleteErrorMessage)
         }
     }
     
@@ -402,10 +453,19 @@ struct BackupsSettingsView: View {
     }
     
     private func deleteBackups(at offsets: IndexSet) {
+        var firstError: Error?
         for index in offsets {
-            try? FileManager.default.removeItem(at: availableBackups[index])
+            do {
+                try FileManager.default.removeItem(at: availableBackups[index])
+            } catch {
+                if firstError == nil { firstError = error }
+            }
         }
         loadBackups()
+        if let error = firstError {
+            deleteErrorMessage = error.localizedDescription
+            showingDeleteError = true
+        }
     }
 }
 
@@ -467,6 +527,12 @@ struct ArchitectToolsView: View {
                     AuditLogViewer()
                 } label: {
                     Label("Audit Logs", systemImage: "doc.text.magnifyingglass")
+                }
+                
+                NavigationLink {
+                    GoogleSignInTestView()
+                } label: {
+                    Label("Google Sign-In Test", systemImage: "person.badge.key")
                 }
                 
                 Button {
@@ -544,4 +610,157 @@ struct DataManagementHubView: View {
 
 #Preview {
     SettingsHubView()
+}
+
+// MARK: - Cloud Sync Settings
+
+struct CloudSyncSettingsView: View {
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var syncEngine: SyncEngine
+    @StateObject private var authManager = GoogleAuthManager.shared
+    
+    var body: some View {
+        List {
+            // Account Section
+            Section {
+                if authManager.isSignedIn {
+                    HStack {
+                        if let imageURL = authManager.currentUser?.profile?.imageURL(withDimension: 80) {
+                            AsyncImage(url: imageURL) { image in
+                                image
+                                    .resizable()
+                                    .frame(width: 40, height: 40)
+                                    .clipShape(Circle())
+                            } placeholder: {
+                                Image(systemName: "person.circle.fill")
+                                    .font(.largeTitle)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Image(systemName: "person.circle.fill")
+                                .font(.largeTitle)
+                                .foregroundStyle(.green)
+                        }
+                        
+                        VStack(alignment: .leading) {
+                            Text(authManager.currentUser?.profile?.name ?? "Signed In")
+                                .font(.headline)
+                            Text(authManager.currentUser?.profile?.email ?? "")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    }
+                    
+                    Button(role: .destructive) {
+                        authManager.signOut()
+                    } label: {
+                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                } else {
+                    Button {
+                        if let rootVC = UIApplication.shared.rootViewController {
+                            Task {
+                                try? await authManager.signIn(presentingViewController: rootVC)
+                            }
+                        }
+                    } label: {
+                        Label("Sign in with Google", systemImage: "person.badge.plus")
+                    }
+                }
+            } header: {
+                Text("Google Account")
+            } footer: {
+                if !authManager.isSignedIn {
+                    Text("Sign in to sync your data across devices.")
+                }
+            }
+            
+            // Sync Status Section
+            if authManager.isSignedIn {
+                Section {
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        if syncEngine.isSyncing {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                Text(syncEngine.syncStatus.message)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if let error = syncEngine.syncError {
+                            Text(error)
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                        } else {
+                            Text(syncEngine.syncStatus.message.isEmpty ? "Ready" : syncEngine.syncStatus.message)
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    
+                    if let lastSync = syncEngine.lastSyncDate {
+                        HStack {
+                            Text("Last Sync")
+                            Spacer()
+                            Text(lastSync, style: .relative)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    
+                    Button {
+                        Task {
+                            await syncEngine.performFullSync(context: modelContext)
+                        }
+                    } label: {
+                        HStack {
+                            Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                            Spacer()
+                            if syncEngine.isSyncing {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(syncEngine.isSyncing)
+                } header: {
+                    Text("Sync")
+                } footer: {
+                    Text("Sync happens automatically when the app opens.")
+                }
+                
+                // Pending Queue Section
+                Section {
+                    let queueCount = SyncQueueManager.shared.queue.count
+                    HStack {
+                        Text("Pending Uploads")
+                        Spacer()
+                        Text("\(queueCount)")
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    Button {
+                        let count = SyncQueueManager.shared.queueAllRecords(context: modelContext)
+                        // Trigger sync after queuing
+                        if count > 0 {
+                            Task {
+                                await syncEngine.performFullSync(context: modelContext)
+                            }
+                        }
+                    } label: {
+                        Label("Queue All for Sync", systemImage: "tray.and.arrow.up")
+                    }
+                    .disabled(syncEngine.isSyncing)
+                } header: {
+                    Text("Queue")
+                } footer: {
+                    Text("Use 'Queue All' for initial sync of existing data.")
+                }
+            }
+        }
+        .navigationTitle("Cloud Sync")
+    }
 }
