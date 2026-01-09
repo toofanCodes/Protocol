@@ -117,4 +117,40 @@ class ChatDataProvider {
 
 ---
 
+## Cloud Sync Encryption
+
+> **Priority:** Future  
+> **Status:** Tabled for later implementation
+
+### Overview
+
+Encrypt sync files before uploading to Google Drive so users cannot manually inspect or modify them. This adds privacy and data integrity protection.
+
+### Proposed Implementation
+
+1. **SyncEncryptionService**
+   - AES-GCM encryption (same as backup encryption)
+   - Key derived from: `HKDF(userGoogleID + bundleID + appSecret)`
+   - No password prompt needed - seamless encryption
+
+2. **Key Management**
+   - Store derived key in Keychain
+   - Same key regenerated on all devices with same Google account
+   
+3. **File Format**
+   - Change extension from `.json` to `.enc`
+   - Container format: `{ salt, nonce, ciphertext }`
+
+### Benefits
+- Users cannot accidentally corrupt sync data
+- Privacy if Drive is compromised
+- Consistent with backup encryption approach
+
+### Considerations
+- Debugging becomes harder (add a debug toggle?)
+- Cross-device key derivation must be deterministic
+- Performance impact minimal for small JSON files
+
+---
+
 *This plan will be revisited when V1 is stable and ready for expansion.*
