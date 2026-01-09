@@ -196,35 +196,35 @@ final class InsightsViewModel: ObservableObject {
             
             // Find start of current week
             let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today)
-            let startOfWeek = calendar.date(from: components)!
+            let startOfWeek = calendar.date(from: components) ?? today
             
-            baseStart = calendar.date(byAdding: .weekOfYear, value: periodOffset, to: startOfWeek)!
-            baseEnd = calendar.date(byAdding: .day, value: 6, to: baseStart)!
+            baseStart = calendar.date(byAdding: .weekOfYear, value: periodOffset, to: startOfWeek) ?? today
+            baseEnd = calendar.date(byAdding: .day, value: 6, to: baseStart) ?? baseStart
             
         case .month:
             // Whole Month
             let components = calendar.dateComponents([.year, .month], from: today)
-            let startOfMonth = calendar.date(from: components)!
+            let startOfMonth = calendar.date(from: components) ?? today
             
-            baseStart = calendar.date(byAdding: .month, value: periodOffset, to: startOfMonth)!
-            let nextMonth = calendar.date(byAdding: .month, value: 1, to: baseStart)!
-            baseEnd = calendar.date(byAdding: .day, value: -1, to: nextMonth)!
+            baseStart = calendar.date(byAdding: .month, value: periodOffset, to: startOfMonth) ?? today
+            let nextMonth = calendar.date(byAdding: .month, value: 1, to: baseStart) ?? baseStart
+            baseEnd = calendar.date(byAdding: .day, value: -1, to: nextMonth) ?? baseStart
             
         case .mtd:
             // Month to Date. Same as Month, but end cap is Today if offset is 0.
             // If offset < 0, it behaves like full Month.
             
             let components = calendar.dateComponents([.year, .month], from: today)
-            let startOfMonth = calendar.date(from: components)!
-            baseStart = calendar.date(byAdding: .month, value: periodOffset, to: startOfMonth)!
+            let startOfMonth = calendar.date(from: components) ?? today
+            baseStart = calendar.date(byAdding: .month, value: periodOffset, to: startOfMonth) ?? today
             
             if periodOffset == 0 {
                 // Today
                 baseEnd = today
             } else {
                 // Full past month
-                let nextMonth = calendar.date(byAdding: .month, value: 1, to: baseStart)!
-                baseEnd = calendar.date(byAdding: .day, value: -1, to: nextMonth)!
+                let nextMonth = calendar.date(byAdding: .month, value: 1, to: baseStart) ?? baseStart
+                baseEnd = calendar.date(byAdding: .day, value: -1, to: nextMonth) ?? baseStart
             }
         }
         
@@ -234,9 +234,9 @@ final class InsightsViewModel: ObservableObject {
     private func previousPeriodRange(currentStart: Date, currentEnd: Date) -> (start: Date, end: Date) {
         let calendar = Calendar.current
         let duration = currentEnd.timeIntervalSince(currentStart)
-        let previousEnd = calendar.date(byAdding: .day, value: -1, to: currentStart)!
+        let previousEnd = calendar.date(byAdding: .day, value: -1, to: currentStart) ?? currentStart
         // Approximate start
-        let previousStart = calendar.date(byAdding: .day, value: 1, to: previousEnd.addingTimeInterval(-duration))!
+        let previousStart = calendar.date(byAdding: .day, value: 1, to: previousEnd.addingTimeInterval(-duration)) ?? previousEnd
         // Re-align if needed for months
         if selectedTimeRange == .month || selectedTimeRange == .mtd {
              if let prevMonthStart = calendar.date(byAdding: .month, value: -1, to: currentStart) {
@@ -308,7 +308,7 @@ final class InsightsViewModel: ObservableObject {
                 completed: compl
             ))
             
-            currentDate = calendar.date(byAdding: .day, value: 1, to: currentDate)!
+            currentDate = calendar.date(byAdding: .day, value: 1, to: currentDate) ?? Date.distantFuture
         }
         self.chartPoints = points
         

@@ -140,28 +140,70 @@ final class AnalyticsQueryService {
     func currentStreak(for molecule: MoleculeTemplate? = nil) -> Int {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
+        // Look back 365 days
+        guard let lookbackDate = calendar.date(byAdding: .day, value: -365, to: today) else { return 0 }
+        let endOftoday = calendar.date(byAdding: .day, value: 1, to: today) ?? today
+        
+        // Fetch all relevant instances in one go
+        let moleculeId = molecule?.id // Capture for predicate
+        
+        let descriptor: FetchDescriptor<MoleculeInstance>
+        if let targetId = moleculeId {
+            descriptor = FetchDescriptor<MoleculeInstance>(
+                predicate: #Predicate { instance in
+                    instance.scheduledDate >= lookbackDate &&
+                    instance.scheduledDate < endOftoday &&
+                    instance.parentTemplate?.id == targetId
+                }
+            )
+        } else {
+            descriptor = FetchDescriptor<MoleculeInstance>(
+                predicate: #Predicate { instance in
+                    instance.scheduledDate >= lookbackDate &&
+                    instance.scheduledDate < endOftoday
+                }
+            )
+        }
+        
+        guard let instances = try? modelContext.fetch(descriptor) else { return 0 }
+        
+        // Group by date
+        // Map: Date -> (scheduled: Bool, completed: Bool)
+        // Since we only care if *any* instance on that date fits criteria
+        var dayStats: [Date: (hasScheduled: Bool, hasCompleted: Bool)] = [:]
+        
+        for instance in instances {
+            let date = calendar.startOfDay(for: instance.scheduledDate)
+            var stats = dayStats[date] ?? (false, false)
+            stats.hasScheduled = true // If instance exists, it was scheduled
+            if instance.isCompleted {
+                stats.hasCompleted = true
+            }
+            dayStats[date] = stats
+        }
+        
+        // Calculate streak
         var streak = 0
         var checkDate = today
         
-        // Check up to 365 days back
         for _ in 0..<365 {
-            // Check if there was a completion on this date
-            let hasCompletion = completedCount(from: checkDate, to: checkDate, molecule: molecule) > 0
+            let stats = dayStats[checkDate] ?? (false, false)
             
-            // For today, also check if there are uncompleted scheduled items
+            // For today: if scheduled but not completed, it doesn't break the streak, but doesn't add to it yet.
+            // Streak continues from yesterday.
             if calendar.isDateInToday(checkDate) {
-                let scheduled = scheduledCount(from: checkDate, to: checkDate, molecule: molecule)
-                if scheduled > 0 && !hasCompletion {
-                    // Today has scheduled items but none completed yet - streak continues from yesterday
-                    checkDate = calendar.date(byAdding: .day, value: -1, to: checkDate)!
-                    continue
+                if stats.hasScheduled && !stats.hasCompleted {
+                     // Check yesterday
+                     checkDate = calendar.date(byAdding: .day, value: -1, to: checkDate)!
+                     continue
                 }
             }
             
-            if hasCompletion {
+            if stats.hasCompleted {
                 streak += 1
                 checkDate = calendar.date(byAdding: .day, value: -1, to: checkDate)!
             } else {
+                // No completion on this day (and not the special "today" case), streak broken
                 break
             }
         }
@@ -308,16 +350,48 @@ final class AnalyticsQueryService {
     /// Returns daily completion rates for calendar heatmap
     func dailyCompletionRates(from: Date, to: Date) -> [Date: Double] {
         let calendar = Calendar.current
-        var results: [Date: Double] = [:]
-        var currentDate = calendar.startOfDay(for: from)
-        let endDate = calendar.startOfDay(for: to)
+        let startOfFrom = calendar.startOfDay(for: from)
+        let endOfTo = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: to)) ?? to
         
-        while currentDate <= endDate {
-            let rate = completionRate(from: currentDate, to: currentDate)
-            results[currentDate] = rate
-            
-            guard let nextDate = calendar.date(byAdding: .day, value: 1, to: currentDate) else { break }
-            currentDate = nextDate
+        // Fetch all instances in range
+        let descriptor = FetchDescriptor<MoleculeInstance>(
+            predicate: #Predicate { instance in
+                instance.scheduledDate >= startOfFrom &&
+                instance.scheduledDate < endOfTo
+            }
+        )
+        
+        guard let instances = try? modelContext.fetch(descriptor) else { return [:] }
+        
+        // Initialize all dates with 0
+        var statsByDate: [Date: (completed: Int, total: Int)] = [:]
+        var currentDate = startOfFrom
+        while currentDate < endOfTo {
+            statsByDate[currentDate] = (0, 0)
+            guard let next = calendar.date(byAdding: .day, value: 1, to: currentDate) else { break }
+            currentDate = next
+        }
+        
+        // Aggregate stats
+        for instance in instances {
+            let date = calendar.startOfDay(for: instance.scheduledDate)
+            // If date is somehow out of range (shouldn't be due to predicate), ignore or handle
+            if statsByDate[date] != nil {
+                statsByDate[date]!.total += 1
+                if instance.isCompleted {
+                    statsByDate[date]!.completed += 1
+                }
+            }
+        }
+        
+        // Calculate rates
+        var results: [Date: Double] = [:]
+        for (date, stats) in statsByDate {
+            if stats.total > 0 {
+                results[date] = (Double(stats.completed) / Double(stats.total)) * 100
+            } else {
+                results[date] = 0
+            }
         }
         
         return results

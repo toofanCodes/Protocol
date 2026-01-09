@@ -9,47 +9,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct AuditLogViewer: View {
-    @State private var entries: [AuditLogEntry] = []
-    @State private var isLoading = true
-    @State private var showingExportSheet = false
-    @State private var exportData: Data?
-    @State private var selectedEntry: AuditLogEntry?
-    
-    // MARK: - Filter State
-    @State private var operationFilter: AuditOperation? = nil
-    @State private var entityFilter: AuditEntityType? = nil
-    @State private var startDate: Date = Calendar.current.date(byAdding: .day, value: -7, to: Date())!
-    @State private var endDate: Date = Date()
-    @State private var showFilters = false
-    
-    // MARK: - Export State
-    @State private var showingExportOptions = false
-    @State private var csvExportURL: URL?
-    @State private var shareItems: [Any] = []
-    
-    var filteredEntries: [AuditLogEntry] {
-        entries.filter { entry in
-            // Operation filter
-            if let op = operationFilter, entry.operation != op {
-                return false
-            }
-            // Entity filter
-            if let entity = entityFilter, entry.entityType != entity {
-                return false
-            }
-            // Date range filter
-            if entry.timestamp < startDate || entry.timestamp > endDate {
-                return false
-            }
-            return true
-        }
-    }
+    @StateObject private var viewModel = AuditLogViewModel()
     
     var body: some View {
         Group {
-            if isLoading {
+            if viewModel.isLoading {
                 ProgressView("Loading logs...")
-            } else if entries.isEmpty {
+            } else if viewModel.entries.isEmpty {
                 ContentUnavailableView(
                     "No Audit Logs",
                     systemImage: "doc.text.magnifyingglass",
@@ -58,7 +24,7 @@ struct AuditLogViewer: View {
             } else {
                 VStack(spacing: 0) {
                     // Filter bar
-                    if showFilters {
+                    if viewModel.showFilters {
                         filterSection
                             .padding()
                             .background(Color(.systemGroupedBackground))
@@ -66,7 +32,7 @@ struct AuditLogViewer: View {
                     
                     // Results count
                     HStack {
-                        Text("\(filteredEntries.count) of \(entries.count) entries")
+                        Text(viewModel.resultCountText)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -76,11 +42,11 @@ struct AuditLogViewer: View {
                     .background(Color(.systemGroupedBackground))
                     
                     List {
-                        ForEach(filteredEntries) { entry in
+                        ForEach(viewModel.filteredEntries) { entry in
                             AuditLogRow(entry: entry)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    selectedEntry = entry
+                                    viewModel.selectedEntry = entry
                                 }
                         }
                     }
@@ -93,52 +59,54 @@ struct AuditLogViewer: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button {
-                        showFilters.toggle()
+                        viewModel.showFilters.toggle()
                     } label: {
-                        Label(showFilters ? "Hide Filters" : "Show Filters", systemImage: "line.3.horizontal.decrease.circle")
+                        Label(viewModel.showFilters ? "Hide Filters" : "Show Filters", systemImage: "line.3.horizontal.decrease.circle")
                     }
                     
                     Divider()
                     
                     Button {
-                        exportAsJSON()
+                        viewModel.exportAsJSON()
                     } label: {
                         Label("Export as JSON", systemImage: "doc.badge.arrow.up")
                     }
-                    .disabled(filteredEntries.isEmpty)
+                    .disabled(viewModel.filteredEntries.isEmpty)
                     
                     Button {
-                        exportAsCSV()
+                        viewModel.exportAsCSV()
                     } label: {
                         Label("Export as CSV", systemImage: "tablecells")
                     }
-                    .disabled(filteredEntries.isEmpty)
+                    .disabled(viewModel.filteredEntries.isEmpty)
                     
                     Divider()
                     
                     Button(role: .destructive) {
-                        clearLogs()
+                        viewModel.clearLogs()
                     } label: {
                         Label("Clear All", systemImage: "trash")
                     }
-                    .disabled(entries.isEmpty)
+                    .disabled(viewModel.entries.isEmpty)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
             }
         }
-        .task {
-            await loadEntries()
+        .onAppear {
+            Task {
+                await viewModel.loadEntries()
+            }
         }
         .refreshable {
-            await loadEntries()
+            await viewModel.loadEntries()
         }
-        .sheet(item: $selectedEntry) { entry in
+        .sheet(item: $viewModel.selectedEntry) { entry in
             AuditLogDetailView(entry: entry)
         }
-        .sheet(isPresented: $showingExportSheet) {
-            if !shareItems.isEmpty {
-                ShareSheet(activityItems: shareItems)
+        .sheet(isPresented: $viewModel.showingExportSheet) {
+            if !viewModel.shareItems.isEmpty {
+                ShareSheet(activityItems: viewModel.shareItems)
             }
         }
     }
@@ -152,7 +120,7 @@ struct AuditLogViewer: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Picker("Operation", selection: $operationFilter) {
+                Picker("Operation", selection: $viewModel.operationFilter) {
                     Text("All").tag(nil as AuditOperation?)
                     ForEach([AuditOperation.create, .update, .delete, .bulkCreate, .bulkDelete], id: \.self) { op in
                         Text(op.rawValue).tag(op as AuditOperation?)
@@ -166,7 +134,7 @@ struct AuditLogViewer: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Picker("Entity", selection: $entityFilter) {
+                Picker("Entity", selection: $viewModel.entityFilter) {
                     Text("All").tag(nil as AuditEntityType?)
                     ForEach([AuditEntityType.moleculeTemplate, .moleculeInstance, .atomTemplate, .atomInstance, .workoutSet], id: \.self) { entity in
                         Text(entity.rawValue).tag(entity as AuditEntityType?)
@@ -180,83 +148,18 @@ struct AuditLogViewer: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                DatePicker("From", selection: $startDate, displayedComponents: .date)
+                DatePicker("From", selection: $viewModel.startDate, displayedComponents: .date)
                     .labelsHidden()
                 Text("to")
                     .font(.caption)
-                DatePicker("To", selection: $endDate, displayedComponents: .date)
+                DatePicker("To", selection: $viewModel.endDate, displayedComponents: .date)
                     .labelsHidden()
             }
             
             Button("Reset Filters") {
-                operationFilter = nil
-                entityFilter = nil
-                startDate = Calendar.current.date(byAdding: .day, value: -7, to: Date())!
-                endDate = Date()
+                viewModel.resetFilters()
             }
             .font(.caption)
-        }
-    }
-    
-    // MARK: - Actions
-    
-    private func loadEntries() async {
-        isLoading = true
-        entries = await AuditLogger.shared.getEntries()
-        isLoading = false
-    }
-    
-    private func exportAsJSON() {
-        Task {
-            if let data = await AuditLogger.shared.exportAsJSON() {
-                shareItems = [data]
-                showingExportSheet = true
-            }
-        }
-    }
-    
-    private func exportAsCSV() {
-        Task {
-            let csv = generateCSV(from: filteredEntries)
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("audit_log.csv")
-            do {
-                try csv.write(to: tempURL, atomically: true, encoding: .utf8)
-                shareItems = [tempURL]
-                showingExportSheet = true
-            } catch {
-                AppLogger.audit.error("Failed to export CSV: \(error.localizedDescription)")
-            }
-        }
-    }
-    
-    private func generateCSV(from entries: [AuditLogEntry]) -> String {
-        var csv = "Timestamp,Operation,Entity Type,Entity ID,Entity Name,Call Site,Changes,Additional Info\n"
-        
-        let dateFormatter = ISO8601DateFormatter()
-        
-        for entry in entries {
-            let timestamp = dateFormatter.string(from: entry.timestamp)
-            let changes = entry.changes?.map { $0.description }.joined(separator: "; ") ?? ""
-            let row = [
-                timestamp,
-                entry.operation.rawValue,
-                entry.entityType.rawValue,
-                entry.entityId,
-                entry.entityName ?? "",
-                entry.callSite,
-                "\"\(changes)\"",
-                entry.additionalInfo ?? ""
-            ].joined(separator: ",")
-            csv += row + "\n"
-        }
-        
-        return csv
-    }
-    
-    private func clearLogs() {
-        Task {
-            await AuditLogger.shared.clearAll()
-            entries = []
         }
     }
 }

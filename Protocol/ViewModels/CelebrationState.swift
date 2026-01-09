@@ -52,7 +52,7 @@ class CelebrationState: ObservableObject {
         guard !isInCooldown else { return }
         lastTriggerTime = Date()
         
-        print("🎉 Triggering molecule celebration! (Intensity: \(intensity.rawValue))")
+        AppLogger.celebrations.debug("Triggering molecule celebration! (Intensity: \(self.intensity.rawValue))")
         celebrationColor = themeColor ?? .accentColor
         
         switch intensity {
@@ -82,7 +82,7 @@ class CelebrationState: ObservableObject {
     
     /// Trigger Perfect Day celebration (all molecules completed for today)
     func triggerPerfectDay() {
-        print("🏆 PERFECT DAY! Triggering Color Bomb celebration!")
+        AppLogger.celebrations.info("PERFECT DAY! Triggering Color Bomb celebration!")
         
         // Play success chime
         SoundManager.shared.playSound(.successChime)

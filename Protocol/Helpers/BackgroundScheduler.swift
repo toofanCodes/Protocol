@@ -37,10 +37,15 @@ final class BackgroundScheduler {
             using: nil
         ) { task in
             Task { @MainActor in
-                await self.handleAppRefresh(task: task as! BGAppRefreshTask)
+                if let refreshTask = task as? BGAppRefreshTask {
+                    await self.handleAppRefresh(task: refreshTask)
+                } else {
+                    AppLogger.background.error("Received unexpected task type: \(type(of: task))")
+                    task.setTaskCompleted(success: false)
+                }
             }
         }
-        print("📋 Registered background task: \(Self.taskIdentifier)")
+        AppLogger.background.info("Registered background task: \(Self.taskIdentifier)")
     }
     
     // MARK: - Task Scheduling
@@ -66,9 +71,9 @@ final class BackgroundScheduler {
         
         do {
             try BGTaskScheduler.shared.submit(request)
-            print("📋 Scheduled background refresh for \(request.earliestBeginDate!)")
+            AppLogger.background.info("Scheduled background refresh for \(request.earliestBeginDate!)")
         } catch {
-            print("⚠️ Failed to schedule background refresh: \(error)")
+            AppLogger.background.error("Failed to schedule background refresh: \(error.localizedDescription)")
         }
     }
     
@@ -89,7 +94,7 @@ final class BackgroundScheduler {
         await NotificationManager.shared.refreshUpcomingNotifications(context: context)
         
         task.setTaskCompleted(success: true)
-        print("✅ Background notification refresh completed")
+        AppLogger.background.info("Background notification refresh completed")
     }
     
     // MARK: - Manual Refresh

@@ -52,7 +52,6 @@ final class UserSettings {
             do {
                 return try JSONDecoder().decode(AppMetadata.self, from: data)
             } catch {
-                print("⚠️ Failed to decode AppMetadata: \(error)")
                 return .default
             }
         }
@@ -61,7 +60,7 @@ final class UserSettings {
                 metadataJSON = try JSONEncoder().encode(newValue)
                 updatedAt = Date()
             } catch {
-                print("⚠️ Failed to encode AppMetadata: \(error)")
+                // Encoding failure is non-critical, silently ignored
             }
         }
     }

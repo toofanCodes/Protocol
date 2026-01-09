@@ -83,14 +83,14 @@ class SoundManager: NSObject {
             try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
-            print("Failed to configure audio session: \(error)")
+            AppLogger.sound.error("Failed to configure audio session: \(error.localizedDescription)")
         }
     }
     
     private func preloadSounds() {
         for type in SoundType.allCases {
             guard let url = Bundle.main.url(forResource: type.filename, withExtension: type.fileExtension) else {
-                print("Sound file not found: \(type.filename).\(type.fileExtension)")
+                AppLogger.sound.warning("Sound file not found: \(type.filename).\(type.fileExtension)")
                 continue
             }
             
@@ -99,7 +99,7 @@ class SoundManager: NSObject {
                 player.prepareToPlay()
                 players[type] = player
             } catch {
-                print("Failed to load sound \(type): \(error)")
+                AppLogger.sound.error("Failed to load sound \(type.rawValue): \(error.localizedDescription)")
             }
         }
     }

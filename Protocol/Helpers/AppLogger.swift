@@ -41,6 +41,21 @@ enum AppLogger {
     
     /// General app lifecycle and misc
     static let general = Logger(subsystem: subsystem, category: "general")
+    
+    /// Celebrations and gamification
+    static let celebrations = Logger(subsystem: subsystem, category: "celebrations")
+    
+    /// Sound and haptic feedback
+    static let sound = Logger(subsystem: subsystem, category: "sound")
+    
+    /// CSV/Blueprint import operations
+    static let `import` = Logger(subsystem: subsystem, category: "import")
+    
+    /// Authentication and Drive access
+    static let auth = Logger(subsystem: subsystem, category: "auth")
+    
+    /// Sync engine operations (upload/download coordination)
+    static let sync = Logger(subsystem: subsystem, category: "sync")
 }
 
 // MARK: - Legacy Print Replacement

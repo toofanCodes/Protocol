@@ -27,6 +27,7 @@ struct BlueprintImportView: View {
     @State private var showingShareSheet = false
     @State private var showingConfirmation = false
     @State private var templateURL: URL?
+    @State private var showingTemplateError = false
     
     // Selection state for import candidates
     @State private var selectedItemIDs: Set<UUID> = []
@@ -97,6 +98,11 @@ struct BlueprintImportView: View {
             if let url = templateURL {
                 ShareSheet(activityItems: [url])
             }
+        }
+        .alert("Error", isPresented: $showingTemplateError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Failed to create template file. Please try again.")
         }
     }
     
@@ -348,7 +354,8 @@ struct BlueprintImportView: View {
             templateURL = fileURL
             showingShareSheet = true
         } catch {
-            print("Failed to create template file: \(error)")
+            AppLogger.`import`.error("Failed to create template file: \(error.localizedDescription)")
+            showingTemplateError = true
         }
     }
     

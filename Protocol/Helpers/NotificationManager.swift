@@ -59,7 +59,7 @@ final class NotificationManager: ObservableObject {
             
             return granted
         } catch {
-            print("⚠️ Failed to request notification authorization: \(error)")
+            AppLogger.notifications.error("Failed to request notification authorization: \(error.localizedDescription)")
             return false
         }
     }
@@ -119,7 +119,7 @@ final class NotificationManager: ObservableObject {
         await cancelNotifications(for: instance)
         
         guard isAuthorized else {
-            print("⚠️ Notifications not authorized")
+            AppLogger.notifications.warning("Notifications not authorized")
             return
         }
         
@@ -160,9 +160,9 @@ final class NotificationManager: ObservableObject {
             
             do {
                 try await center.add(request)
-                print("📅 Scheduled notification: \(instance.displayTitle) at \(triggerDate) (offset: \(offset)m)")
+                AppLogger.notifications.debug("Scheduled notification: \(instance.displayTitle) at \(triggerDate) (offset: \(offset)m)")
             } catch {
-                print("⚠️ Failed to schedule notification: \(error)")
+                AppLogger.notifications.error("Failed to schedule notification: \(error.localizedDescription)")
             }
         }
     }
@@ -187,7 +187,7 @@ final class NotificationManager: ObservableObject {
         
         if !identifiersToRemove.isEmpty {
             UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiersToRemove)
-            print("🗑️ Cancelled \(identifiersToRemove.count) notifications for instance \(instance.displayTitle)")
+            AppLogger.notifications.debug("Cancelled \(identifiersToRemove.count) notifications for instance \(instance.displayTitle)")
         }
     }
     
@@ -211,7 +211,7 @@ final class NotificationManager: ObservableObject {
     /// Cancels all pending notifications
     func cancelAllNotifications() {
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
-        print("🗑️ Cancelled ALL pending notifications")
+        AppLogger.notifications.info("Cancelled ALL pending notifications")
     }
     
     // MARK: - Rolling Window Scheduler (3-Day Batch)
@@ -236,7 +236,7 @@ final class NotificationManager: ObservableObject {
         )
         
         guard let instances = try? context.fetch(descriptor) else {
-            print("⚠️ Failed to fetch instances for notification refresh")
+            AppLogger.notifications.warning("Failed to fetch instances for notification refresh")
             return
         }
         
@@ -249,7 +249,7 @@ final class NotificationManager: ObservableObject {
         }
         
         let count = await getPendingNotificationCount()
-        print("📅 Refreshed notifications: \(count) scheduled (\(instances.count) instances in next \(Self.rollingWindowDays) days)")
+        AppLogger.notifications.info("Refreshed notifications: \(count) scheduled (\(instances.count) instances in next \(Self.rollingWindowDays) days)")
     }
     
     // MARK: - Snooze
@@ -302,14 +302,14 @@ final class NotificationManager: ObservableObject {
     /// Debug: Print all pending notifications
     func debugPrintPendingNotifications() async {
         let requests = await UNUserNotificationCenter.current().pendingNotificationRequests()
-        print("📋 Pending Notifications (\(requests.count)):")
+        AppLogger.notifications.debug("Pending Notifications (\(requests.count)):")
         for request in requests.prefix(10) {
             if let trigger = request.trigger as? UNCalendarNotificationTrigger {
-                print("  - \(request.identifier): \(trigger.nextTriggerDate() ?? Date())")
+                AppLogger.notifications.debug("  - \(request.identifier): \(trigger.nextTriggerDate() ?? Date())")
             }
         }
         if requests.count > 10 {
-            print("  ... and \(requests.count - 10) more")
+            AppLogger.notifications.debug("  ... and \(requests.count - 10) more")
         }
     }
 }

@@ -279,11 +279,26 @@ actor AuditLogger {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         
+        // Capture current state to avoid actor isolation issues in closure
+        let entriesToSave = self.entries
+        
         do {
-            let data = try encoder.encode(entries)
-            try data.write(to: url, options: .atomic)
+            let data = try encoder.encode(entriesToSave)
+            
+            return await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    do {
+                        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                    } catch {
+                        // Note: Depending on AppLogger implementation, this might need to be isolated.
+                        // Assuming OSLog/Logger which is thread-safe.
+                        print("⚠️ Failed to save audit log: \(error.localizedDescription)")
+                    }
+                    continuation.resume()
+                }
+            }
         } catch {
-            AppLogger.audit.error("⚠️ Failed to save audit log: \(error.localizedDescription)")
+            AppLogger.audit.error("⚠️ Failed to encode audit log: \(error.localizedDescription)")
         }
     }
     
