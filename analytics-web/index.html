@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Protocol Analytics</title>
+  <link rel="stylesheet" href="/src/styles.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Protocol Analytics</h1>
+      <div id="auth-status"></div>
+    </header>
+    
+    <main>
+      <div id="signin-prompt" class="hidden">
+        <h2>Sign in to view your analytics</h2>
+        <button id="signin-btn" class="btn-primary">Sign in with Google</button>
+      </div>
+      
+      <div id="dashboard" class="hidden">
+        <section id="query-interface">
+          <input 
+            type="text" 
+            id="query-input" 
+            placeholder="Ask anything... (e.g., What's my completion rate this week?)"
+            autocomplete="off"
+          />
+          <button id="query-btn" class="btn-primary">Ask</button>
+        </section>
+        
+        <section id="sync-status">
+          <span id="sync-indicator">⚪ Not synced</span>
+          <button id="sync-btn" class="btn-secondary">Sync Now</button>
+        </section>
+        
+        <section id="results">
+          <!-- Dynamic content rendered here -->
+        </section>
+      </div>
+    </main>
+  </div>
+  
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
