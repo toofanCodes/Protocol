@@ -55,6 +55,9 @@ final class AtomTemplate {
     /// Creation timestamp
     var createdAt: Date
     
+    /// Last modification timestamp (for sync)
+    var updatedAt: Date = Date()
+    
     // MARK: - Icon Properties
     
     /// Custom icon symbol (1-2 chars/emoji). Nil = use first letter of title
@@ -98,6 +101,7 @@ final class AtomTemplate {
         videoURL: String? = nil,
         parentMoleculeTemplate: MoleculeTemplate? = nil,
         createdAt: Date = Date(),
+        updatedAt: Date = Date(),
         iconSymbol: String? = nil,
         iconFrame: IconFrameStyle = .circle
     ) {
@@ -113,6 +117,7 @@ final class AtomTemplate {
         self.videoURL = videoURL
         self.parentMoleculeTemplate = parentMoleculeTemplate
         self.createdAt = createdAt
+        self.updatedAt = updatedAt
         self.iconSymbol = iconSymbol
         self.iconFrameRaw = iconFrame.rawValue
     }
@@ -215,5 +220,66 @@ extension AtomTemplate: Hashable {
     
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
+    }
+}
+
+// MARK: - SyncableRecord Conformance
+extension AtomTemplate: SyncableRecord {
+    var syncID: UUID { id }
+    
+    var lastModified: Date {
+        get { updatedAt }
+        set { updatedAt = newValue }
+    }
+    
+    var isDeleted: Bool {
+        get { isArchived }
+        set { isArchived = newValue }
+    }
+    
+    func toSyncJSON() -> Data? {
+        let formatter = Self.syncDateFormatter
+        
+        var json: [String: Any] = [
+            "syncID": syncID.uuidString,
+            "lastModified": formatter.string(from: lastModified),
+            "isDeleted": isDeleted,
+            "title": title,
+            "inputType": inputType.rawValue,
+            "order": order,
+            "createdAt": formatter.string(from: createdAt),
+            "iconFrameRaw": iconFrameRaw,
+            "themeColorHex": themeColorHex
+        ]
+        
+        // Optional properties
+        if let targetValue = targetValue {
+            json["targetValue"] = targetValue
+        }
+        if let unit = unit {
+            json["unit"] = unit
+        }
+        if let targetSets = targetSets {
+            json["targetSets"] = targetSets
+        }
+        if let targetReps = targetReps {
+            json["targetReps"] = targetReps
+        }
+        if let defaultRestTime = defaultRestTime {
+            json["defaultRestTime"] = defaultRestTime
+        }
+        if let videoURL = videoURL {
+            json["videoURL"] = videoURL
+        }
+        if let iconSymbol = iconSymbol {
+            json["iconSymbol"] = iconSymbol
+        }
+        
+        // Parent relationship UUID
+        if let parentID = parentMoleculeTemplate?.id {
+            json["moleculeTemplateID"] = parentID.uuidString
+        }
+        
+        return try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
     }
 }

@@ -8,10 +8,14 @@
 import SwiftData
 import Foundation
 import SQLite3
+import os.log
 
 @MainActor
 class DataController {
     static let shared = DataController()
+    
+    // Widget-compatible logger for SQL errors
+    private static let logger = Logger(subsystem: "com.Toofan.Toofanprotocol", category: "DataController")
     
     // App Group ID for shared container with Widget
     static let appGroupIdentifier = "group.com.Toofan.Toofanprotocol.shared"
@@ -22,15 +26,23 @@ class DataController {
         // Use simple schema without VersionedSchema for lightweight migration
         // New properties (iconSymbol: String?, iconFrameRaw: String = "circle") 
         // are lightweight-migration compatible
-        let schema = Schema([
+        
+        var schemaTypes: [any PersistentModel.Type] = [
             MoleculeTemplate.self,
             MoleculeInstance.self,
             AtomTemplate.self,
             AtomInstance.self,
             WorkoutSet.self,
-            UserSettings.self,
-            PersistentAuditLog.self
-        ])
+            UserSettings.self
+        ]
+        
+        // Exclude PersistentAuditLog in Widget to save memory (approx 10-20MB overhead)
+        // Core Data simply ignores the extra table if it's not in the model.
+        if !Bundle.main.bundlePath.hasSuffix(".appex") {
+            schemaTypes.append(PersistentAuditLog.self)
+        }
+        
+        let schema = Schema(schemaTypes)
         
         var modelConfiguration: ModelConfiguration
         var sqliteURL: URL?
@@ -42,6 +54,17 @@ class DataController {
             // 2. Check for corruption & recover
             if let dbURL = sqliteURL, FileManager.default.fileExists(atPath: dbURL.path) {
                 Self.recoverFromMissingMetadata(at: dbURL)
+                
+                // Apply widget-compatible file protection to database files
+                // Using .completeUntilFirstUserAuthentication allows widgets to access when device is locked
+                for file in [dbURL.path, dbURL.path + "-wal", dbURL.path + "-shm"] {
+                    if FileManager.default.fileExists(atPath: file) {
+                        try? FileManager.default.setAttributes(
+                            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                            ofItemAtPath: file
+                        )
+                    }
+                }
             }
             
             if let safeURL = sqliteURL {
@@ -157,9 +180,10 @@ class DataController {
     private static func execute(_ sql: String, in db: OpaquePointer?) {
         var errorMsg: UnsafeMutablePointer<Int8>? = nil
         if sqlite3_exec(db, sql, nil, nil, &errorMsg) != SQLITE_OK {
-            if let errorPointer = errorMsg {
-                print("❌ SQL Error: \(String(cString: errorPointer)) in: \(sql)")
-                sqlite3_free(errorMsg)
+            if let msg = errorMsg {
+                let error = String(cString: msg)
+                logger.error("SQL execution failed: \(error, privacy: .public) | SQL: \(sql, privacy: .public)")
+                sqlite3_free(msg)
             }
         }
     }

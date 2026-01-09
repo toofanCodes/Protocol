@@ -178,8 +178,8 @@ final class DataControllerRecoveryTests: XCTestCase {
 // MARK: - Expose Internal Method for Testing
 
 extension DataController {
-    /// Exposed for testing purposes
-    static func recoverFromMissingMetadata(at url: URL) {
+    /// Exposed for testing purposes - nonisolated since it's standalone SQLite operations
+    nonisolated static func recoverFromMissingMetadata(at url: URL) {
         var db: OpaquePointer?
         guard sqlite3_open(url.path, &db) == SQLITE_OK else { return }
         defer { sqlite3_close(db) }
@@ -193,15 +193,15 @@ extension DataController {
                     }
                 }
                 performAuxiliaryCleanupPublic(in: db)
-                needsDataRestore = true
+                // Note: needsDataRestore flag is main-actor isolated, not set in test helper
             } else if tableExists("ZMOLECULETEMPLATE_BAK", in: db) {
                 performAuxiliaryCleanupPublic(in: db)
-                needsDataRestore = true
+                // Note: needsDataRestore flag is main-actor isolated, not set in test helper
             }
         }
     }
     
-    private static func tableExists(_ name: String, in db: OpaquePointer?) -> Bool {
+    private nonisolated static func tableExists(_ name: String, in db: OpaquePointer?) -> Bool {
         var stmt: OpaquePointer?
         let sql = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?;"
         if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
@@ -216,16 +216,16 @@ extension DataController {
         return false
     }
     
-    private static func executeSQL(_ sql: String, in db: OpaquePointer?) {
+    private nonisolated static func executeSQL(_ sql: String, in db: OpaquePointer?) {
         var errorMsg: UnsafeMutablePointer<Int8>? = nil
         if sqlite3_exec(db, sql, nil, nil, &errorMsg) != SQLITE_OK {
-            if let error = errorMsg {
+            if errorMsg != nil {
                 sqlite3_free(errorMsg)
             }
         }
     }
     
-    private static func performAuxiliaryCleanupPublic(in db: OpaquePointer?) {
+    private nonisolated static func performAuxiliaryCleanupPublic(in db: OpaquePointer?) {
         var stmt: OpaquePointer?
         let sql = "SELECT name FROM sqlite_master WHERE type='table';"
         var tablesToDrop: [String] = []
