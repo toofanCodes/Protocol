@@ -1,0 +1,30 @@
+{
+  "configurations" : [
+    {
+      "id" : "3D03A283-0184-40D5-A5A9-5F8840B84EB2",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:Protocol.xcodeproj",
+      "identifier" : "A1000060",
+      "name" : "Protocol"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:Protocol.xcodeproj",
+        "identifier" : "D1ECF9B22F0F4CEF002B68C6",
+        "name" : "ProtocolTests"
+      }
+    }
+  ],
+  "version" : 1
+}
