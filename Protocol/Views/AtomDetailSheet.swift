@@ -46,6 +46,7 @@ struct AtomDetailSheet: View {
     // MARK: - Settings State
     
     @State private var showingEditor = false
+    @State private var showingClearConfirmation = false
     
     enum TimerState {
         case ready      // "Start Set"
@@ -169,6 +170,26 @@ struct AtomDetailSheet: View {
                         .buttonStyle(.plain)
                         .disabled(timerState == .working && !isInputValid)
                         
+                        // Cancel Set button (only visible when timer is running)
+                        if timerState == .working {
+                            Button(role: .destructive) {
+                                cancelCurrentSet()
+                            } label: {
+                                Text("Cancel Set")
+                                    .font(.subheadline)
+                            }
+                        }
+                        
+                        // Skip Rest button (only visible during rest)
+                        if timerState == .resting {
+                            Button {
+                                skipRest()
+                            } label: {
+                                Text("Skip Rest & Start Next Set")
+                                    .font(.subheadline)
+                            }
+                        }
+                        
                         // Helper text for invalid input
                         if timerState == .working && !isInputValid {
                             Text("Enter weight or reps to finish set")
@@ -181,7 +202,7 @@ struct AtomDetailSheet: View {
                 }
                 
                 // Completed Sets Section
-                Section("Completed Sets") {
+                Section {
                     if atom.sets.isEmpty {
                         Text("No sets logged yet")
                             .font(.subheadline)
@@ -229,6 +250,19 @@ struct AtomDetailSheet: View {
                             }
                         }
                         .onDelete(perform: deleteSets)
+                        
+                        // Clear All button
+                        Button(role: .destructive) {
+                            showingClearConfirmation = true
+                        } label: {
+                            Label("Clear All Sets", systemImage: "trash")
+                        }
+                    }
+                } header: {
+                    Text("Completed Sets")
+                } footer: {
+                    if !atom.sets.isEmpty {
+                        Text("Swipe left to delete individual sets")
                     }
                 }
                 
@@ -276,7 +310,32 @@ struct AtomDetailSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
+                    Button {
+                        switch focusedField {
+                        case .reps:
+                            focusedField = .weight
+                        default:
+                            break
+                        }
+                    } label: {
+                        Image(systemName: "chevron.up")
+                    }
+                    .disabled(focusedField == .weight)
+                    
+                    Button {
+                        switch focusedField {
+                        case .weight:
+                            focusedField = .reps
+                        default:
+                            break
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .disabled(focusedField == .reps)
+                    
                     Spacer()
+                    
                     Button("Done") {
                         focusedField = nil
                     }
@@ -304,6 +363,14 @@ struct AtomDetailSheet: View {
                 if newPhase == .active {
                     recalculateTimerDisplay()
                 }
+            }
+            .alert("Clear All Sets?", isPresented: $showingClearConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Clear All", role: .destructive) {
+                    clearAllSets()
+                }
+            } message: {
+                Text("This will delete all logged sets and reset your workout progress. This cannot be undone.")
             }
         }
     }
@@ -481,6 +548,60 @@ struct AtomDetailSheet: View {
         atom.updateCompletionFromSets()
         try? modelContext.save()
     }
+    
+    /// Cancels the current set in progress without saving
+    private func cancelCurrentSet() {
+        stopTimer()
+        timerState = .ready
+        timerStartTime = nil
+        displayedTime = 0
+        // Keep inputs in case user wants to retry
+    }
+    
+    /// Skips the rest period and goes straight to the next set
+    private func skipRest() {
+        stopTimer()
+        restStartTime = nil
+        
+        // Check if all sets completed
+        if atom.completedSetsCount >= (atom.targetSets ?? 0) {
+            atom.markComplete()
+            moleculeService.checkForProgression(atomInstance: atom)
+            try? modelContext.save()
+            dismiss()
+        } else {
+            // Ready for next set
+            timerState = .ready
+            displayedTime = 0
+        }
+    }
+    
+    /// Clears all logged sets and resets the workout
+    private func clearAllSets() {
+        stopTimer()
+        
+        // Delete all sets
+        for set in atom.sets {
+            modelContext.delete(set)
+        }
+        
+        // Reset state
+        atom.currentValue = nil
+        atom.isCompleted = false
+        atom.updateCompletionFromSets()
+        
+        // Reset timer
+        timerState = .ready
+        timerStartTime = nil
+        restStartTime = nil
+        displayedTime = 0
+        
+        // Clear inputs
+        currentWeight = ""
+        currentReps = ""
+        
+        try? modelContext.save()
+    }
 }
 
 // MARK: - Edit Set Sheet
@@ -492,6 +613,12 @@ struct EditSetSheet: View {
     @State private var reps: String
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    
+    @FocusState private var focusedField: Field?
+    
+    enum Field: Hashable {
+        case weight, reps
+    }
     
     init(set: WorkoutSet, atom: AtomInstance, initialWeight: String, initialReps: String) {
         self.set = set
@@ -511,6 +638,7 @@ struct EditSetSheet: View {
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 80)
+                            .focused($focusedField, equals: .weight)
                         Text(atom.unit ?? "lbs")
                             .foregroundStyle(.secondary)
                     }
@@ -521,12 +649,38 @@ struct EditSetSheet: View {
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 60)
+                            .focused($focusedField, equals: .reps)
                     }
                 }
             }
             .navigationTitle("Edit Set")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button {
+                        if focusedField == .reps {
+                            focusedField = .weight
+                        }
+                    } label: {
+                        Image(systemName: "chevron.up")
+                    }
+                    .disabled(focusedField == .weight)
+                    
+                    Button {
+                        if focusedField == .weight {
+                            focusedField = .reps
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .disabled(focusedField == .reps)
+                    
+                    Spacer()
+                    
+                    Button("Done") {
+                        focusedField = nil
+                    }
+                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }

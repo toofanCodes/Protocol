@@ -33,6 +33,16 @@ struct MoleculeBlockView: View {
         return "\(count) Task\(count == 1 ? "" : "s")"
     }
     
+    /// Whether the scheduled time has passed
+    private var isOverdue: Bool {
+        !instance.isCompleted && instance.scheduledDate < Date()
+    }
+    
+    /// Progress value (0.0 to 1.0)
+    private var progress: Double {
+        instance.progress
+    }
+    
     // MARK: - Body
     
     var body: some View {
@@ -78,12 +88,23 @@ struct MoleculeBlockView: View {
                     .foregroundStyle(textColor.opacity(0.8))
             }
             
-            // Status Strip on right
-            Rectangle()
-                .fill(instance.isCompleted ? Color.green : textColor.opacity(0.5))
-                .frame(width: 4)
-                .clipShape(Capsule())
-                .padding(.vertical, 4)
+            // Progress Strip on right (fills from bottom to top)
+            GeometryReader { geometry in
+                ZStack(alignment: .bottom) {
+                    // Background: Red if overdue and not complete, otherwise subtle
+                    Rectangle()
+                        .fill(isOverdue ? Color.red.opacity(0.6) : textColor.opacity(0.2))
+                    
+                    // Progress fill (green, from bottom)
+                    Rectangle()
+                        .fill(Color.green)
+                        .frame(height: geometry.size.height * progress)
+                        .animation(.easeInOut(duration: 0.3), value: progress)
+                }
+            }
+            .frame(width: 4)
+            .clipShape(Capsule())
+            .padding(.vertical, 4)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 8)

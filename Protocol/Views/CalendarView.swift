@@ -18,7 +18,7 @@ fileprivate func fetchTodayInstances(modelContext: ModelContext) -> [MoleculeIns
     
     let descriptor = FetchDescriptor<MoleculeInstance>(
         predicate: #Predicate<MoleculeInstance> { instance in
-            instance.scheduledDate >= startOfDay && instance.scheduledDate < endOfDay
+            instance.scheduledDate >= startOfDay && instance.scheduledDate < endOfDay && instance.isArchived == false
         }
     )
     
@@ -62,39 +62,54 @@ struct CalendarView: View {
                 FilterBar(viewModel: viewModel, templates: templates)
                     .zIndex(1)
                 
-                // 3. Main Content (TabView)
-                TabView(selection: $viewModel.viewMode) {
-                    DayView(
-                        viewModel: viewModel,
-                        instances: viewModel.filteredInstances(from: allInstances),
-                        draggingInstance: $draggingInstance,
-                        dragOffset: $dragOffset,
-                        onDrop: dropInstance,
-                        onLongPress: { time in
-                            longPressTime = time
-                            showingNewHabitSheet = true
-                        }
-                    )
-                    .tag(CalendarViewMode.day)
-                    
-                    WeekView(
-                        viewModel: viewModel,
-                        allInstances: allInstances // Pass all, view filters
-                    )
-                    .tag(CalendarViewMode.week)
-                    
-                    MonthView(
-                        viewModel: viewModel,
-                        allInstances: allInstances
-                    )
-                    .tag(CalendarViewMode.month)
+                // 3. Main Content - Swipe navigates within current view mode
+                Group {
+                    switch viewModel.viewMode {
+                    case .day:
+                        DayView(
+                            viewModel: viewModel,
+                            instances: viewModel.filteredInstances(from: allInstances),
+                            draggingInstance: $draggingInstance,
+                            dragOffset: $dragOffset,
+                            onDrop: dropInstance,
+                            onLongPress: { time in
+                                longPressTime = time
+                                showingNewHabitSheet = true
+                            }
+                        )
+                    case .week:
+                        WeekView(
+                            viewModel: viewModel,
+                            allInstances: allInstances
+                        )
+                    case .month:
+                        MonthView(
+                            viewModel: viewModel,
+                            allInstances: allInstances
+                        )
+                    }
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                // Disable swipe to avoid conflict with drag or Calendar nav? 
-                // Using page style allows swiping between modes which might be nice or confusing. 
-                // User asked for "Switch statement on View Picker", implying explicit switch.
-                // Standard TabView with page style gives transitions.
-                // But let's use a standard switch if preferred for strict mode control.
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 50, coordinateSpace: .local)
+                        .onEnded { value in
+                            // Only respond to horizontal swipes (not vertical scrolling)
+                            let horizontalAmount = value.translation.width
+                            let verticalAmount = value.translation.height
+                            
+                            // Require horizontal movement to be greater than vertical
+                            if abs(horizontalAmount) > abs(verticalAmount) {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    if horizontalAmount < 0 {
+                                        // Swipe left → move forward
+                                        viewModel.moveDate(by: 1)
+                                    } else {
+                                        // Swipe right → move backward
+                                        viewModel.moveDate(by: -1)
+                                    }
+                                }
+                            }
+                        }
+                )
             }
             .navigationBarHidden(true)
             .sheet(item: $viewModel.selectedInstance) { instance in
@@ -265,6 +280,7 @@ struct AppHeaderView: View {
 
 struct CalendarHeader: View {
     @ObservedObject var viewModel: CalendarViewModel
+    @State private var showingDatePicker = false
     
     var body: some View {
         HStack {
@@ -278,10 +294,16 @@ struct CalendarHeader: View {
             
             Spacer()
             
-            Text(viewModel.title)
-                .font(.headline)
-                .fontWeight(.semibold)
-                .fontDesign(.rounded)
+            // Tappable date title
+            Button {
+                showingDatePicker = true
+            } label: {
+                Text(viewModel.title)
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .fontDesign(.rounded)
+                    .foregroundStyle(.primary)
+            }
             
             Spacer()
             
@@ -317,6 +339,54 @@ struct CalendarHeader: View {
         .padding(.horizontal)
         .padding(.vertical, 12)
         .background(Color(uiColor: .systemBackground))
+        .sheet(isPresented: $showingDatePicker) {
+            DatePickerSheet(selectedDate: $viewModel.currentDate, isPresented: $showingDatePicker)
+        }
+    }
+}
+
+/// Sheet for picking a specific date
+struct DatePickerSheet: View {
+    @Binding var selectedDate: Date
+    @Binding var isPresented: Bool
+    @State private var pickerDate: Date = Date()
+    
+    var body: some View {
+        NavigationStack {
+            VStack {
+                DatePicker(
+                    "Select Date",
+                    selection: $pickerDate,
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                .padding()
+                
+                Spacer()
+            }
+            .navigationTitle("Go to Date")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        isPresented = false
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Go") {
+                        withAnimation {
+                            selectedDate = pickerDate
+                        }
+                        isPresented = false
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+            .onAppear {
+                pickerDate = selectedDate
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
 
@@ -447,13 +517,12 @@ struct DayView: View {
                 )
             } else {
                 VStack(spacing: 0) {
-                    // Section A: All-Day Dock (max 30% height)
+                    // Section A: All-Day Dock (fixed height for 1 banner + header)
                     if !allDayInstances.isEmpty {
                         AllDayDockView(
                             instances: allDayInstances,
                             viewModel: viewModel
                         )
-                        .frame(maxHeight: geometry.size.height * 0.3)
                         
                         Divider()
                     }
@@ -780,86 +849,110 @@ struct AllDayDockView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var celebrationState: CelebrationState
     
+    /// Threshold for when to use ScrollView vs plain VStack
+    /// Scroll when more than 1 item (show only 1 banner at a time)
+    private let scrollThreshold = 1
+    
+    /// Fixed height for the dock: header (~24pt) + 1 banner (~51pt) + padding (16pt)
+    private let dockFixedHeight: CGFloat = 91
+    
+    /// Whether we need scrolling (more than threshold items)
+    private var needsScrolling: Bool {
+        instances.count > scrollThreshold
+    }
+    
     var body: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                // Header
-                HStack {
-                    Text("All Day")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("\(instances.count)")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+        VStack(spacing: 8) {
+            // Header
+            HStack {
+                Text("All Day")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(instances.count)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal)
+            
+            // Content: ScrollView for many items, plain VStack for few
+            if needsScrolling {
+                ScrollView {
+                    bannersContent
                 }
-                .padding(.horizontal)
-                
-                // Banners
-                ForEach(instances) { instance in
-                    AllDayBanner(instance: instance)
-                        .onTapGesture {
-                            viewModel.selectedInstance = instance
-                        }
-                        .contextMenu {
-                            Button {
-                                instance.toggleComplete()
-                                if instance.isCompleted {
-                                    NotificationManager.shared.cancelNotification(for: instance)
-                                    
-                                    // Trigger celebration with delay
-                                    celebrationState.triggerMoleculeCompletion(themeColor: instance.parentTemplate?.themeColor, delay: 0.5)
-                                    
-                                    // Check Perfect Day
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                        let todayInstances = fetchTodayInstances(modelContext: modelContext)
-                                        celebrationState.checkPerfectDay(todayInstances: todayInstances, delay: 0)
-                                    }
+            } else {
+                bannersContent
+            }
+        }
+        .padding(.vertical, 8)
+        .frame(height: dockFixedHeight)
+        .background(Color(uiColor: .systemBackground))
+    }
+    
+    /// Extracted banners content for reuse
+    private var bannersContent: some View {
+        VStack(spacing: 8) {
+            ForEach(instances) { instance in
+                AllDayBanner(instance: instance)
+                    .onTapGesture {
+                        viewModel.selectedInstance = instance
+                    }
+                    .contextMenu {
+                        Button {
+                            instance.toggleComplete()
+                            if instance.isCompleted {
+                                NotificationManager.shared.cancelNotification(for: instance)
+                                
+                                // Trigger celebration with delay
+                                celebrationState.triggerMoleculeCompletion(themeColor: instance.parentTemplate?.themeColor, delay: 0.5)
+                                
+                                // Check Perfect Day
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                    let todayInstances = fetchTodayInstances(modelContext: modelContext)
+                                    celebrationState.checkPerfectDay(todayInstances: todayInstances, delay: 0)
                                 }
-                                try? modelContext.save()
-                            } label: {
-                                Label(
-                                    instance.isCompleted ? "Mark Incomplete" : "Mark Complete",
-                                    systemImage: instance.isCompleted ? "xmark.circle" : "checkmark.circle"
+                            }
+                            try? modelContext.save()
+                        } label: {
+                            Label(
+                                instance.isCompleted ? "Mark Incomplete" : "Mark Complete",
+                                systemImage: instance.isCompleted ? "xmark.circle" : "checkmark.circle"
+                            )
+                        }
+                        
+                        Button {
+                            viewModel.selectedInstance = instance
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        
+                        Divider()
+                        
+                        Button(role: .destructive) {
+                            // Capture info before deletion
+                            let instanceId = instance.id.uuidString
+                            let instanceName = instance.displayTitle
+                            
+                            NotificationManager.shared.cancelNotification(for: instance)
+                            modelContext.delete(instance)
+                            try? modelContext.save()
+                            
+                            // Audit log
+                            Task {
+                                await AuditLogger.shared.logDelete(
+                                    entityType: .moleculeInstance,
+                                    entityId: instanceId,
+                                    entityName: instanceName,
+                                    additionalInfo: "Deleted via AllDayDockView context menu"
                                 )
                             }
-                            
-                            Button {
-                                viewModel.selectedInstance = instance
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                            }
-                            
-                            Divider()
-                            
-                            Button(role: .destructive) {
-                                // Capture info before deletion
-                                let instanceId = instance.id.uuidString
-                                let instanceName = instance.displayTitle
-                                
-                                NotificationManager.shared.cancelNotification(for: instance)
-                                modelContext.delete(instance)
-                                try? modelContext.save()
-                                
-                                // Audit log
-                                Task {
-                                    await AuditLogger.shared.logDelete(
-                                        entityType: .moleculeInstance,
-                                        entityId: instanceId,
-                                        entityName: instanceName,
-                                        additionalInfo: "Deleted via AllDayDockView context menu"
-                                    )
-                                }
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
                         }
-                }
+                    }
             }
-            .padding(.vertical, 8)
         }
-        .background(Color(uiColor: .systemBackground))
     }
 }
 
@@ -871,39 +964,75 @@ struct AllDayBanner: View {
         instance.parentTemplate?.themeColor ?? .accentColor
     }
     
+    /// Progress value from the molecule (0.0 to 1.0)
+    private var progress: Double {
+        instance.progress
+    }
+    
+    /// Whether the all-day event is overdue (scheduled for a past day)
+    private var isOverdue: Bool {
+        !instance.isCompleted && Calendar.current.startOfDay(for: instance.scheduledDate) < Calendar.current.startOfDay(for: Date())
+    }
+    
     var body: some View {
-        HStack(spacing: 10) {
-            // Avatar (24x24 for compact all-day banner)
-            if let template = instance.parentTemplate {
-                AvatarView(
-                    molecule: template,
-                    size: 24
-                )
-            } else {
-                Circle()
-                    .fill(instance.isCompleted ? Color.green : themeColor)
-                    .frame(width: 24, height: 24)
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                // Avatar (24x24 for compact all-day banner)
+                if let template = instance.parentTemplate {
+                    AvatarView(
+                        molecule: template,
+                        size: 24
+                    )
+                } else {
+                    Circle()
+                        .fill(instance.isCompleted ? Color.green : themeColor)
+                        .frame(width: 24, height: 24)
+                }
+                
+                // Title
+                Text(instance.displayTitle)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .strikethrough(instance.isCompleted)
+                    .foregroundStyle(instance.isCompleted ? .secondary : .primary)
+                    .lineLimit(1)
+                
+                Spacer()
+                
+                // Progress percentage (only show if has atoms and not complete)
+                if !instance.isCompleted && progress > 0 {
+                    Text("\(Int(progress * 100))%")
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+                }
+                
+                // Completion indicator
+                if instance.isCompleted {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.caption)
+                }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             
-            // Title
-            Text(instance.displayTitle)
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .strikethrough(instance.isCompleted)
-                .foregroundStyle(instance.isCompleted ? .secondary : .primary)
-                .lineLimit(1)
-            
-            Spacer()
-            
-            // Completion indicator
-            if instance.isCompleted {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.caption)
+            // Horizontal progress bar at the bottom edge
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    // Background: Red if overdue and not complete, otherwise subtle gray
+                    Rectangle()
+                        .fill(isOverdue ? Color.red.opacity(0.6) : Color(uiColor: .tertiarySystemBackground))
+                    
+                    // Progress fill (green, from left)
+                    Rectangle()
+                        .fill(Color.green)
+                        .frame(width: geometry.size.width * progress)
+                        .animation(.easeInOut(duration: 0.3), value: progress)
+                }
             }
+            .frame(height: 3)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
         .background(Color(uiColor: .secondarySystemBackground))
         .cornerRadius(8)
         .padding(.horizontal)
@@ -1234,87 +1363,137 @@ struct WeekView: View {
         return (0..<7).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: start) }
     }
     
+    /// Check if current week contains today
+    private var weekContainsToday: Bool {
+        daysOfWeek.contains { Calendar.current.isDateInToday($0) }
+    }
+    
+    /// Today's date for scrolling target
+    private var todayDate: Date? {
+        daysOfWeek.first { Calendar.current.isDateInToday($0) }
+    }
+    
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                ForEach(daysOfWeek, id: \.self) { date in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(date.formatted(.dateTime.weekday(.wide).day()))
-                            .font(.headline)
-                            .foregroundStyle(Calendar.current.isDateInToday(date) ? .red : .primary)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 16) {
+                    ForEach(daysOfWeek, id: \.self) { date in
+                        let isToday = Calendar.current.isDateInToday(date)
                         
-                        let dayInstances = instancesFor(date: date)
-                        if dayInstances.isEmpty {
-                            Text("No tasks")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(dayInstances) { instance in
-                                MoleculeBlockView(instance: instance)
-                                    .onTapGesture {
-                                        viewModel.selectedInstance = instance
-                                    }
-                                    .contextMenu {
-                                        Button {
-                                            instance.toggleComplete()
-                                            if instance.isCompleted {
-                                                NotificationManager.shared.cancelNotification(for: instance)
-                                                celebrationState.triggerMoleculeCompletion(themeColor: instance.parentTemplate?.themeColor)
-                                                
-                                                // Check Perfect Day
-                                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                                    let todayInstances = fetchTodayInstances(modelContext: modelContext)
-                                                    celebrationState.checkPerfectDay(todayInstances: todayInstances)
-                                                }
-                                            }
-                                            try? modelContext.save()
-                                        } label: {
-                                            Label(
-                                                instance.isCompleted ? "Mark Incomplete" : "Mark Complete",
-                                                systemImage: instance.isCompleted ? "xmark.circle" : "checkmark.circle"
-                                            )
-                                        }
-                                        
-                                        Button {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(date.formatted(.dateTime.weekday(.wide).day()))
+                                    .font(.headline)
+                                    .foregroundStyle(isToday ? .white : .primary)
+                                
+                                if isToday {
+                                    // "Today" capsule indicator (similar to "Now" line in DayView)
+                                    Text("Today")
+                                        .font(.caption2)
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Capsule().fill(Color.red))
+                                }
+                                
+                                Spacer()
+                            }
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 8)
+                            .background(isToday ? Color.red : Color.clear)
+                            .cornerRadius(8)
+                            
+                            let dayInstances = instancesFor(date: date)
+                            if dayInstances.isEmpty {
+                                Text("No tasks")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(dayInstances) { instance in
+                                    MoleculeBlockView(instance: instance)
+                                        .onTapGesture {
                                             viewModel.selectedInstance = instance
-                                        } label: {
-                                            Label("Edit", systemImage: "pencil")
                                         }
-                                        
-                                        Divider()
-                                        
-                                        Button(role: .destructive) {
-                                            // Capture info before deletion
-                                            let instanceId = instance.id.uuidString
-                                            let instanceName = instance.displayTitle
-                                            
-                                            NotificationManager.shared.cancelNotification(for: instance)
-                                            modelContext.delete(instance)
-                                            try? modelContext.save()
-                                            
-                                            // Audit log
-                                            Task {
-                                                await AuditLogger.shared.logDelete(
-                                                    entityType: .moleculeInstance,
-                                                    entityId: instanceId,
-                                                    entityName: instanceName,
-                                                    additionalInfo: "Deleted via MonthView context menu"
+                                        .contextMenu {
+                                            Button {
+                                                instance.toggleComplete()
+                                                if instance.isCompleted {
+                                                    NotificationManager.shared.cancelNotification(for: instance)
+                                                    celebrationState.triggerMoleculeCompletion(themeColor: instance.parentTemplate?.themeColor)
+                                                    
+                                                    // Check Perfect Day
+                                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                                        let todayInstances = fetchTodayInstances(modelContext: modelContext)
+                                                        celebrationState.checkPerfectDay(todayInstances: todayInstances)
+                                                    }
+                                                }
+                                                try? modelContext.save()
+                                            } label: {
+                                                Label(
+                                                    instance.isCompleted ? "Mark Incomplete" : "Mark Complete",
+                                                    systemImage: instance.isCompleted ? "xmark.circle" : "checkmark.circle"
                                                 )
                                             }
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
+                                            
+                                            Button {
+                                                viewModel.selectedInstance = instance
+                                            } label: {
+                                                Label("Edit", systemImage: "pencil")
+                                            }
+                                            
+                                            Divider()
+                                            
+                                            Button(role: .destructive) {
+                                                // Capture info before deletion
+                                                let instanceId = instance.id.uuidString
+                                                let instanceName = instance.displayTitle
+                                                
+                                                NotificationManager.shared.cancelNotification(for: instance)
+                                                modelContext.delete(instance)
+                                                try? modelContext.save()
+                                                
+                                                // Audit log
+                                                Task {
+                                                    await AuditLogger.shared.logDelete(
+                                                        entityType: .moleculeInstance,
+                                                        entityId: instanceId,
+                                                        entityName: instanceName,
+                                                        additionalInfo: "Deleted via WeekView context menu"
+                                                    )
+                                                }
+                                            } label: {
+                                                Label("Delete", systemImage: "trash")
+                                            }
                                         }
-                                    }
+                                }
                             }
                         }
+                        .padding(.horizontal)
+                        .id(date) // ID for ScrollViewReader
+                        
+                        Divider()
+                            .padding(.leading)
                     }
-                    .padding(.horizontal)
-                    
-                    Divider()
-                        .padding(.leading)
+                }
+                .padding(.vertical)
+            }
+            .onAppear {
+                scrollToToday(proxy: proxy)
+            }
+            .onChange(of: viewModel.currentDate) { _, _ in
+                scrollToToday(proxy: proxy)
+            }
+        }
+    }
+    
+    private func scrollToToday(proxy: ScrollViewProxy) {
+        if let today = todayDate {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    proxy.scrollTo(today, anchor: .top)
                 }
             }
-            .padding(.vertical)
         }
     }
     
