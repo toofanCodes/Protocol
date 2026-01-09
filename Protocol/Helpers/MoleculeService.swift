@@ -36,9 +36,17 @@ final class MoleculeService: ObservableObject {
         let instances = template.generateInstances(until: targetDate, in: modelContext)
         for instance in instances {
             modelContext.insert(instance)
+            SyncQueueManager.shared.addToQueue(instance) // Queue instance
         }
         
-        try? modelContext.save()
+        // Queue template creation
+        SyncQueueManager.shared.addToQueue(template)
+        
+        do {
+            try modelContext.save()
+        } catch {
+            AppLogger.data.error("Failed to save template creation: \(error.localizedDescription)")
+        }
         
         // Audit log
         Task {
@@ -71,9 +79,14 @@ final class MoleculeService: ObservableObject {
         
         for instance in newInstances {
             modelContext.insert(instance)
+            SyncQueueManager.shared.addToQueue(instance) // Queue instance
         }
         
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            AppLogger.data.error("Failed to save backfill instances: \(error.localizedDescription)")
+        }
         
         // Audit log
         Task {
@@ -98,7 +111,7 @@ final class MoleculeService: ObservableObject {
         let templateName = template.title
         let templateId = template.id.uuidString
         
-        print("🔴 DELETION STARTED for \(templateName)")
+        AppLogger.data.info("DELETION STARTED for \(templateName)")
         
         // 0. Pre-calculate values (Read-only, no UI side effects)
         let now = Date()
@@ -116,34 +129,40 @@ final class MoleculeService: ObservableObject {
             additionalInfo: "Soft deleted (Archived). Removed \(deleteCount) future instances."
         )
         modelContext.insert(logEntry)
-        print("🟡 AUDIT LOG PREPARED (Template not archived yet)")
+        AppLogger.data.debug("AUDIT LOG PREPARED (Template not archived yet)")
         
         // 2. Archive Template & Delete Instances (Trigger SwiftUI Updates)
         // Note: SwiftUI reacts immediately to this part!
         template.isArchived = true
+        template.lastModified = Date() // Update timestamp ensuring sync happens
+        SyncQueueManager.shared.addToQueue(template) // Queue update (Archive)
         
         for instance in instancesToDelete {
             NotificationManager.shared.cancelNotification(for: instance)
-            modelContext.delete(instance)
+            modelContext.delete(instance) // Hard delete of FUTURE instances (acceptable)
         }
         
         // Cancel notifications
         NotificationManager.shared.cancelNotifications(for: template)
         
-        print("🟠 ARCHIVE FLAG SET (SwiftUI Reaction Window Open)")
+        AppLogger.data.debug("ARCHIVE FLAG SET (SwiftUI Reaction Window Open)")
         
         // 3. Atomic Save (Commit Log + Archive together)
         do {
             try modelContext.save()
-            print("🟢 SAVE COMPLETED - Persistence Secured")
-            print("🔵 AUDIT LOG COMMITTED")
+            AppLogger.data.info("SAVE COMPLETED - Persistence Secured")
+            AppLogger.data.debug("AUDIT LOG COMMITTED")
         } catch {
-            print("❌ SAVE FAILED: \(error)")
+            AppLogger.data.error("SAVE FAILED: \(error.localizedDescription)")
             AppLogger.data.error("Failed to archive template: \(error)")
             modelContext.rollback() // Revert UI state on failure
             throw error
         }
     }
+    
+    // ... [Instances section skipped as SyncQueueManager is called in Model] ...
+
+
     
     // MARK: - Instance Operations
     
@@ -156,14 +175,22 @@ final class MoleculeService: ObservableObject {
         }
         
         modelContext.delete(instance)
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            AppLogger.data.error("Failed to save instance deletion: \(error.localizedDescription)")
+        }
     }
     
     /// Marks an instance as complete
     func markComplete(_ instance: MoleculeInstance) {
         let wasCompleted = instance.isCompleted
         instance.markComplete()
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            AppLogger.data.error("Failed to save completion status: \(error.localizedDescription)")
+        }
         
         // Audit log
         Task {
@@ -180,7 +207,11 @@ final class MoleculeService: ObservableObject {
     func markIncomplete(_ instance: MoleculeInstance) {
         let wasCompleted = instance.isCompleted
         instance.markIncomplete()
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            AppLogger.data.error("Failed to save incomplete status: \(error.localizedDescription)")
+        }
         
         // Audit log
         Task {
@@ -197,7 +228,11 @@ final class MoleculeService: ObservableObject {
     func snooze(_ instance: MoleculeInstance, byMinutes minutes: Int) {
         let oldDate = instance.scheduledDate
         instance.snooze(by: minutes)
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            AppLogger.data.error("Failed to save snooze update: \(error.localizedDescription)")
+        }
         
         // Audit log
         Task {
@@ -254,7 +289,11 @@ final class MoleculeService: ObservableObject {
         }
         
         instance.updatedAt = Date()
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            AppLogger.data.error("Failed to save single instance update: \(error.localizedDescription)")
+        }
         
         // Audit log
         Task {
@@ -324,7 +363,11 @@ final class MoleculeService: ObservableObject {
         // Regenerate future instances from the current instance's date
         regenerateFutureInstances(for: template, startingFrom: instance.scheduledDate)
         
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            AppLogger.data.error("Failed to save future events update: \(error.localizedDescription)")
+        }
         
         // Audit log
         Task {
@@ -386,7 +429,11 @@ final class MoleculeService: ObservableObject {
             modelContext.insert(instance)
         }
         
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            AppLogger.data.error("Failed to save regenerate instances: \(error.localizedDescription)")
+        }
         
         // Schedule notifications
         Task {
@@ -408,7 +455,11 @@ final class MoleculeService: ObservableObject {
         guard let template = instance.parentTemplate else {
             // No template, just delete the instance
             modelContext.delete(instance)
-            try? modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                AppLogger.data.error("Failed to save instance deletion: \(error.localizedDescription)")
+            }
             return
         }
         
@@ -463,7 +514,11 @@ final class MoleculeService: ObservableObject {
             }
         }
         
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            AppLogger.data.error("Failed to save delete events: \(error.localizedDescription)")
+        }
     }
 
     
@@ -484,7 +539,11 @@ final class MoleculeService: ObservableObject {
             // Update the baseline for future instances
             let oldTarget = atomTemplate.targetValue
             atomTemplate.targetValue = current
-            try? modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                AppLogger.data.error("Failed to save progression update: \(error.localizedDescription)")
+            }
             AppLogger.data.info("💪 Progressive Overload: Updated baseline to \(current) \(atomTemplate.unit ?? "")")
             
             // Audit log

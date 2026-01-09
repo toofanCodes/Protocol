@@ -6,6 +6,23 @@
 	<array>
 		<string>com.protocol.notification.refresh</string>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string></string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.google.signin</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.605008087786-23u4digfnvfe8sobdu4td7qnjhmk2oq1</string>
+			</array>
+		</dict>
+	</array>
+	<key>GIDClientID</key>
+	<string>605008087786-23u4digfnvfe8sobdu4td7qnjhmk2oq1.apps.googleusercontent.com</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

@@ -176,6 +176,16 @@ final class MoleculeInstance {
         return formatter.string(from: effectiveTime)
     }
     
+    /// Completion progress (0.0 to 1.0) based on atom instances
+    /// Returns 1.0 if completed or has no atoms, 0.0 if no atoms completed
+    var progress: Double {
+        if isCompleted { return 1.0 }
+        guard !atomInstances.isEmpty else { return isCompleted ? 1.0 : 0.0 }
+        
+        let completedCount = atomInstances.filter { $0.isCompleted }.count
+        return Double(completedCount) / Double(atomInstances.count)
+    }
+    
     // MARK: - Actions
     
     /// Marks this instance as completed and cascades to all atom children
@@ -191,6 +201,11 @@ final class MoleculeInstance {
                 atom.completedAt = Date()
             }
         }
+        
+        // Queue for sync (not available in Widget extension)
+        #if !WIDGET_EXTENSION
+        SyncQueueManager.shared.addToQueue(self)
+        #endif
         
         // NOTE: Caller should cancel notifications via NotificationManager.shared.cancelNotifications(for: self)
         
@@ -210,6 +225,11 @@ final class MoleculeInstance {
             atom.completedAt = nil
         }
         
+        // Queue for sync (not available in Widget extension)
+        #if !WIDGET_EXTENSION
+        SyncQueueManager.shared.addToQueue(self)
+        #endif
+        
         // Refresh widget
         refreshWidget()
     }
@@ -228,19 +248,28 @@ final class MoleculeInstance {
         guard !atomInstances.isEmpty else { return }
         
         let allAtomsComplete = atomInstances.allSatisfy { $0.isCompleted }
+        var changed = false
         
         if allAtomsComplete && !isCompleted {
             // All atoms done, auto-complete parent
             isCompleted = true
             completedAt = Date()
             updatedAt = Date()
+            changed = true
             refreshWidget()
         } else if !allAtomsComplete && isCompleted {
             // An atom was unchecked, mark parent incomplete
             isCompleted = false
             completedAt = nil
             updatedAt = Date()
+            changed = true
             refreshWidget()
+        }
+        
+        if changed {
+            #if !WIDGET_EXTENSION
+            SyncQueueManager.shared.addToQueue(self)
+            #endif
         }
     }
     
@@ -275,6 +304,9 @@ final class MoleculeInstance {
         }
         
         updatedAt = Date()
+        #if !WIDGET_EXTENSION
+        SyncQueueManager.shared.addToQueue(self)
+        #endif
     }
     
     /// Reverts this instance back to following the template
@@ -297,6 +329,9 @@ final class MoleculeInstance {
         }
         
         updatedAt = Date()
+        #if !WIDGET_EXTENSION
+        SyncQueueManager.shared.addToQueue(self)
+        #endif
     }
     
     /// Snoozes this instance by a specified number of minutes
@@ -313,6 +348,9 @@ final class MoleculeInstance {
             }
             
             updatedAt = Date()
+            #if !WIDGET_EXTENSION
+            SyncQueueManager.shared.addToQueue(self)
+            #endif
         }
     }
 }
@@ -332,5 +370,63 @@ extension MoleculeInstance: Hashable {
 extension MoleculeInstance: Comparable {
     static func < (lhs: MoleculeInstance, rhs: MoleculeInstance) -> Bool {
         lhs.scheduledDate < rhs.scheduledDate
+    }
+}
+
+// MARK: - SyncableRecord Conformance
+extension MoleculeInstance: SyncableRecord {
+    var syncID: UUID { id }
+    
+    var lastModified: Date {
+        get { updatedAt }
+        set { updatedAt = newValue }
+    }
+    
+    var isDeleted: Bool {
+        get { isArchived }
+        set { isArchived = newValue }
+    }
+    
+    func toSyncJSON() -> Data? {
+        let formatter = Self.syncDateFormatter
+        
+        var json: [String: Any] = [
+            "syncID": syncID.uuidString,
+            "lastModified": formatter.string(from: lastModified),
+            "isDeleted": isDeleted,
+            "scheduledDate": formatter.string(from: scheduledDate),
+            "isCompleted": isCompleted,
+            "isException": isException,
+            "isAllDay": isAllDay,
+            "alertOffsets": alertOffsets,
+            "createdAt": formatter.string(from: createdAt)
+        ]
+        
+        // Optional properties
+        if let completedAt = completedAt {
+            json["completedAt"] = formatter.string(from: completedAt)
+        }
+        if let exceptionTitle = exceptionTitle {
+            json["exceptionTitle"] = exceptionTitle
+        }
+        if let exceptionTime = exceptionTime {
+            json["exceptionTime"] = formatter.string(from: exceptionTime)
+        }
+        if let notes = notes {
+            json["notes"] = notes
+        }
+        if let originalScheduledDate = originalScheduledDate {
+            json["originalScheduledDate"] = formatter.string(from: originalScheduledDate)
+        }
+        
+        // Parent relationship UUID
+        if let parentID = parentTemplate?.id {
+            json["moleculeTemplateID"] = parentID.uuidString
+        }
+        
+        // Child relationship UUIDs
+        json["atomInstanceIDs"] = atomInstances.map { $0.id.uuidString }
+        
+        return try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
     }
 }

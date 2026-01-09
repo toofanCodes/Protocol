@@ -235,11 +235,21 @@ final class MoleculeTemplate {
     ///   - targetDate: The end date to generate instances until (inclusive)
     ///   - context: ModelContext for idempotency check (prevents duplicates)
     /// - Returns: Array of NEW MoleculeInstance objects (skips existing dates)
+    /// Generates instances for this template from a start date until a target date
+    /// Also clones all AtomTemplates into AtomInstances for each generated instance
+    /// - Parameters:
+    ///   - start: The start date to generate instances from (default: Today)
+    ///   - targetDate: The end date to generate instances until (inclusive)
+    ///   - context: ModelContext for idempotency check (prevents duplicates)
+    /// - Returns: Array of NEW MoleculeInstance objects (skips existing dates)
     func generateInstances(from start: Date = Date(), until targetDate: Date, in context: ModelContext) -> [MoleculeInstance] {
         var generatedInstances: [MoleculeInstance] = []
         let calendar = Calendar.current
         var currentDate = calendar.startOfDay(for: start)
         let endDate = calendar.startOfDay(for: targetDate)
+        
+        // Optimize: Batch fetch existing dates to avoid N+1 queries
+        let existingDates = fetchExistingDates(from: currentDate, to: endDate, in: context)
         
         // Sort atom templates by order for consistent cloning
         let sortedAtomTemplates = atomTemplates.sorted { $0.order < $1.order }
@@ -264,8 +274,8 @@ final class MoleculeTemplate {
             
             // Check if this date matches the recurrence pattern
             if shouldGenerateInstance(for: currentDate, calendar: calendar) {
-                // Idempotency check: Use predicate-based query instead of loading all instances
-                guard !instanceExists(for: currentDate, in: context) else {
+                // Idempotency check: Use pre-fetched Set
+                guard !existingDates.contains(currentDate) else {
                     // Already exists, skip to next day
                     currentDate = calendar.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate.addingTimeInterval(86400)
                     continue
@@ -303,35 +313,42 @@ final class MoleculeTemplate {
         return generatedInstances
     }
     
-    /// Checks if an instance already exists for a given date using a predicate-based query.
-    /// This is memory-efficient as it doesn't load all instances into memory.
-    /// - Parameters:
-    ///   - date: The date to check
-    ///   - context: The ModelContext to query
-    /// - Returns: true if an instance already exists for this template on this date
-    private func instanceExists(for date: Date, in context: ModelContext) -> Bool {
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: date)
-        guard let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) else {
-            return false
-        }
+    /// Batch fetches existing instance dates for a range
+    private func fetchExistingDates(from start: Date, to end: Date, in context: ModelContext) -> Set<Date> {
         let templateId = self.id
+        // Add 1 day to end for exclusive upper bound if needed, but <= covers it.
+        // Actually, let's be safe and go to end of day.
+        let calendar = Calendar.current
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: end) ?? end
         
-        var descriptor = FetchDescriptor<MoleculeInstance>(
+        // We only need the date component (start of day) for comparison
+        // But instances are stored with exact times.
+        // However, our logic compares `startOfDay` dates.
+        // Wait, `instanceExists` logic was checking:
+        // instance.scheduledDate >= startOfDay && instance.scheduledDate < endOfDay
+        
+        let descriptor = FetchDescriptor<MoleculeInstance>(
             predicate: #Predicate { instance in
                 instance.parentTemplate?.id == templateId &&
-                instance.scheduledDate >= startOfDay &&
+                instance.scheduledDate >= start &&
                 instance.scheduledDate < endOfDay
             }
         )
-        descriptor.fetchLimit = 1
+        // We only need the dates.
+        // SwiftData doesn't support `.propertiesToFetch` nicely in FetchDescriptor Generic init easily until iOS 18?
+        // But we can just fetch and map.
         
         do {
-            let count = try context.fetchCount(descriptor)
-            return count > 0
+            let instances = try context.fetch(descriptor)
+            // Normalize to start of day for comparison
+            return Set(instances.map { calendar.startOfDay(for: $0.scheduledDate) })
         } catch {
-            // Fallback: check in-memory relationship (less efficient but safe)
-            return instances.contains { calendar.isDate($0.scheduledDate, inSameDayAs: date) }
+            print("Failed to batch fetch existing dates: \(error)")
+            // Fallback: Return empty set so we might double create? 
+            // Better to match old behavior: check in-memory relationship?
+            // If fetch fails, we probably have bigger issues. 
+            // Let's use the in-memory `instances` array as fallback source of truth.
+            return Set(self.instances.map { calendar.startOfDay(for: $0.scheduledDate) })
         }
     }
     
@@ -456,5 +473,65 @@ extension MoleculeTemplate: Hashable {
     
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
+    }
+}
+
+// MARK: - SyncableRecord Conformance
+extension MoleculeTemplate: SyncableRecord {
+    var syncID: UUID { id }
+    
+    var lastModified: Date {
+        get { updatedAt }
+        set { updatedAt = newValue }
+    }
+    
+    var isDeleted: Bool {
+        get { isArchived }
+        set { isArchived = newValue }
+    }
+    
+    func toSyncJSON() -> Data? {
+        let formatter = Self.syncDateFormatter
+        
+        var json: [String: Any] = [
+            "syncID": syncID.uuidString,
+            "lastModified": formatter.string(from: lastModified),
+            "isDeleted": isDeleted,
+            "title": title,
+            "baseTime": formatter.string(from: baseTime),
+            "recurrenceFreq": recurrenceFreq.rawValue,
+            "recurrenceDays": recurrenceDays,
+            "endRuleType": endRuleType.rawValue,
+            "alertOffsets": alertOffsets,
+            "isAllDay": isAllDay,
+            "isPinned": isPinned,
+            "sortOrder": sortOrder,
+            "createdAt": formatter.string(from: createdAt),
+            "iconFrameRaw": iconFrameRaw,
+            "themeColorHex": themeColorHex
+        ]
+        
+        // Optional properties
+        if let endRuleDate = endRuleDate {
+            json["endRuleDate"] = formatter.string(from: endRuleDate)
+        }
+        if let endRuleCount = endRuleCount {
+            json["endRuleCount"] = endRuleCount
+        }
+        if let notes = notes {
+            json["notes"] = notes
+        }
+        if let compound = compound {
+            json["compound"] = compound
+        }
+        if let iconSymbol = iconSymbol {
+            json["iconSymbol"] = iconSymbol
+        }
+        
+        // Relationship UUIDs (not nested objects)
+        json["atomTemplateIDs"] = atomTemplates.map { $0.id.uuidString }
+        json["instanceIDs"] = instances.map { $0.id.uuidString }
+        
+        return try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
     }
 }

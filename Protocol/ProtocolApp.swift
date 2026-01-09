@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import GoogleSignIn
 
 @main
 struct ProtocolApp: App {
@@ -19,6 +20,7 @@ struct ProtocolApp: App {
     
     private let notificationHandler = NotificationHandler()
     @StateObject private var celebrationState = CelebrationState()
+    @StateObject private var syncEngine = SyncEngine.shared
     @Environment(\.scenePhase) private var scenePhase
     
     // MARK: - Initializer
@@ -37,6 +39,7 @@ struct ProtocolApp: App {
                     .onAppear {
                         setupNotifications()
                         seedDataOnFirstLaunch()
+                        restoreGoogleSignIn()
                     }
                 
                 // Gamification Overlay - Confetti (Z-Index 100)
@@ -64,8 +67,13 @@ struct ProtocolApp: App {
             .environmentObject(MoleculeService(modelContext: sharedModelContainer.mainContext))
             .environmentObject(celebrationState)
             .environmentObject(DeepLinkManager.shared)
+            .environmentObject(syncEngine)
             .onChange(of: scenePhase) { oldPhase, newPhase in
                 handleScenePhaseChange(from: oldPhase, to: newPhase)
+            }
+            // Handle Google Sign-In OAuth callback URL
+            .onOpenURL { url in
+                GIDSignIn.sharedInstance.handle(url)
             }
         }
     }
@@ -133,6 +141,8 @@ struct ProtocolApp: App {
                 await BackgroundScheduler.shared.refreshNotifications()
                 await BackupManager.shared.autoBackup(context: sharedModelContainer.mainContext)
             }
+            // Sync with cloud in background (fire-and-forget, never blocks)
+            SyncEngine.shared.performFullSyncSafely(context: sharedModelContainer.mainContext)
         case .background:
             // Schedule background refresh when entering background
             BackgroundScheduler.shared.scheduleAppRefresh()
@@ -140,6 +150,17 @@ struct ProtocolApp: App {
             break
         @unknown default:
             break
+        }
+    }
+    
+    /// Silently restore previous Google Sign-In session
+    private func restoreGoogleSignIn() {
+        Task {
+            await GoogleAuthManager.shared.restorePreviousSignIn()
+            // Trigger initial sync in background (fire-and-forget, never blocks)
+            if GoogleAuthManager.shared.isSignedIn {
+                SyncEngine.shared.performFullSyncSafely(context: sharedModelContainer.mainContext)
+            }
         }
     }
 }
