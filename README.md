@@ -12,6 +12,37 @@ Protocol is a native iOS application designed to help users build **compound rou
 
 ---
 
+## 📑 Table of Contents
+
+<details>
+<summary><strong>Click to expand</strong></summary>
+
+- [🧪 Core Concepts](#-core-concepts)
+- [✨ Features](#-features)
+  - [Core Habit Tracking](#core-habit-tracking)
+  - [Analytics & Insights](#analytics--insights)
+  - [Workout & Exercise](#workout--exercise)
+  - [Data Management](#data-management)
+  - [Gamification](#gamification)
+  - [Organization](#organization)
+- [🛠 Tech Stack](#-tech-stack)
+- [🏗 Architecture](#-architecture)
+- [🚀 Getting Started](#-getting-started)
+- [🧪 Testing](#-testing)
+- [🔒 Privacy & Security](#-privacy--security)
+- [🤖 AI-Assisted Development](#-ai-assisted-development)
+  - [🧠 Model Optimization Philosophy](#-model-optimization-philosophy)
+  - [👥 Virtual Team Orchestration](#-virtual-team-orchestration)
+  - [🛠 AI Tools & Workflows](#-ai-tools--workflows-1)
+  - [💡 Key Learnings](#-key-learnings)
+- [📄 License](#-license)
+- [🏷 Version History](#-version-history)
+- [📚 Additional Documentation](#-additional-documentation)
+
+</details>
+
+---
+
 ## 🧪 Core Concepts
 
 | Concept | Description |
