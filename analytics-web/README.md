@@ -1,68 +1,21 @@
-# Protocol Analytics Web Dashboard
+# Analytics Web (Work In Progress)
 
-A web-based analytics platform for Protocol habit tracking data.
+**⚠️ This project is currently under development and is not yet ready for production use.**
 
-## Setup
+This directory contains a web-based library for displaying analytics for the Protocol app.
 
-### Prerequisites
-- Node.js 18+
-- Firebase CLI (`npm install -g firebase-tools`)
-- Google Cloud Project with Drive API enabled
-- Firebase project
+## Security Configuration
 
-### Installation
+This project contains placeholder API keys in the source code for setup purposes. **Do not replace these placeholders directly.**
 
-1. Install dependencies:
-```bash
-cd analytics-web
-npm install
+To configure the project for local development, create a new file named `.env.local` in this directory. This file is included in `.gitignore` and will not be committed.
+
+Your `.env.local` file should contain your development keys:
+
+```
+VITE_GAPI_CLIENT_ID=YOUR_CLIENT_ID_HERE.apps.googleusercontent.com
+VITE_GAPI_API_KEY=YOUR_API_KEY_HERE
+VITE_GEMINI_API_KEY=YOUR_GEMINI_API_KEY_HERE
 ```
 
-2. Configure Google OAuth:
-   - Go to [Google Cloud Console](https://console.cloud.google.com/)
-   - Create/select project
-   - Enable Google Drive API
-   - Create OAuth 2.0 credentials (Web application)
-   - Add authorized JavaScript origin: `http://localhost:5173` (for dev) and your Firebase domain
-   - Copy Client ID and API Key to `src/auth.js`
-
-3. Configure Firebase:
-   - Run `firebase login`
-   - Run `firebase init` (select Hosting)
-   - Update `.firebaserc` with your project ID
-
-4. Configure Gemini API (for Phase 5):
-   - Get API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
-   - Add to `src/query.js`
-
-### Development
-
-```bash
-npm run dev
-```
-
-Opens at `http://localhost:5173`
-
-### Deployment
-
-```bash
-npm run deploy
-```
-
-## Architecture
-
-- **Auth**: Google OAuth via Google API client
-- **Sync**: Downloads JSON files from Google Drive, caches in IndexedDB
-- **Query**: LLM-powered natural language queries (Phase 5)
-- **Viz**: Chart.js charts (Phase 4)
-
-## Current Status
-
-Phase 1 (Foundation) complete:
-- ✅ Project structure
-- ✅ Firebase configuration
-- ✅ Auth scaffolding
-- ✅ Sync scaffolding
-- ⏳ Need to add Google credentials
-
-Next: Configure auth credentials and test Drive API connection.
+The application will load these variables at runtime.

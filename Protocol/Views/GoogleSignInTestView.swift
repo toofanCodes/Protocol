@@ -137,7 +137,7 @@ struct GoogleSignInTestView: View {
             if let token = await authManager.getAccessToken() {
                 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 print("🔑 ACCESS TOKEN:")
-                print(token)
+                print("\(token.prefix(8))...[\(token.count) chars]")
                 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             } else {
                 print("❌ No access token available")

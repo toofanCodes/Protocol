@@ -1,7 +1,7 @@
 // Google OAuth Authentication
 // Instructions: Replace with your actual API credentials from Google Cloud Console
-const CLIENT_ID = 'YOUR_CLIENT_ID_HERE.apps.googleusercontent.com';
-const API_KEY = 'YOUR_API_KEY_HERE';
+const CLIENT_ID = import.meta.env.VITE_GAPI_CLIENT_ID;
+const API_KEY = import.meta.env.VITE_GAPI_API_KEY;
 
 const DISCOVERY_DOCS = ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'];
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
