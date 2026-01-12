@@ -136,6 +136,31 @@ When restoring a pre-V3 backup, `AtomTemplate.updatedAt` will be set to restore 
 
 ---
 
+## Cloud Sync & Conflict Resolution
+
+The sync architecture is designed to be robust and prevent data loss when using the app on multiple devices.
+
+### Device Identity
+- **`DeviceIdentity.swift`**: Establishes a stable, unique ID for each device using `identifierForVendor` with a Keychain fallback. This ensures the app can distinguish between different devices (e.g., an iPhone and an iPad) even after re-installs.
+
+### Device Registry
+- **`device_registry.json`**: A file stored in the user's Google Drive app folder that acts as the source of truth for all devices linked to an account.
+- It tracks each device's ID, name, and last sync timestamp.
+
+### Sync Workflow & Conflict Detection
+1.  **Sync Triggered**: User initiates a sync.
+2.  **Simulator Block**: Sync is automatically blocked if running on a simulator to prevent accidental data overwrites during development.
+3.  **Registry Check**: `SyncEngine` fetches `device_registry.json` from Google Drive.
+4.  **Conflict Detection**:
+    - If the current device's ID is **not** in the registry and other devices **are**, a conflict is flagged. This means a new device is trying to sync to an existing cloud dataset.
+    - The user is shown the `ConflictResolutionView`.
+5.  **User Resolution**: The user must choose one of two paths:
+    - **Use This Device's Data**: Local data is uploaded to the cloud, overwriting the existing remote data. The new device is added to the registry.
+    - **Use Cloud Data**: Remote data is downloaded, overwriting all local data. The new device is added to the registry.
+6.  **Standard Sync**: If no conflict is detected, the normal sync process (downloading remote changes, then uploading local changes) proceeds. The device's `lastSyncDate` is updated in the registry.
+
+---
+
 ## Widget
 
 The **ProtocolWidget** displays today's upcoming molecules. It uses raw SQLite queries for memory efficiency:

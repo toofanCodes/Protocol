@@ -78,7 +78,7 @@ Protocol is a native iOS application designed to help users build **compound rou
 ### Data Management
 - 🏗️ **Blueprint Architect** — Bulk import habits via CSV with recurrence & compound support
 - 💿 **Encrypted Backups** — AES-GCM encrypted local backups with password protection
-- ☁️ **Google Drive Sync** — Cloud backup with conflict resolution and tombstone handling
+- ☁️ **Device-Aware Sync** — Google Drive sync that recognizes multiple devices, preventing conflicts and allowing users to resolve them by choosing between local or cloud data.
 - 📋 **Audit Logging** — Complete history of data changes for debugging
 - 🗂️ **Archive System** — Hide completed routines without losing history
 - 🔎 **Orphan Manager** — Find and repair data integrity issues

@@ -1121,3 +1121,54 @@ extension DriveService {
     }
 }
 
+// MARK: - Device Registry Management
+
+extension DriveService {
+    private static let deviceRegistryFilename = "device_registry.json"
+    
+    /// Fetches the device registry from Google Drive
+    /// Returns an empty registry if file doesn't exist yet
+    func fetchDeviceRegistry() async throws -> DeviceRegistry {
+        let folderID = try await ensureRemoteDirectoryReady()
+        
+        // Search for existing registry file
+        guard let fileID = try await searchFile(name: Self.deviceRegistryFilename, in: folderID) else {
+            // No registry exists yet - return empty
+            return DeviceRegistry()
+        }
+        
+        // Download and parse
+        let data = try await downloadFile(fileID: fileID)
+        
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        do {
+            return try decoder.decode(DeviceRegistry.self, from: data)
+        } catch {
+            AppLogger.sync.warning("⚠️ Failed to decode device registry: \(error)")
+            return DeviceRegistry()
+        }
+    }
+    
+    /// Updates the device registry on Google Drive
+    func updateDeviceRegistry(_ registry: DeviceRegistry) async throws {
+        let folderID = try await ensureRemoteDirectoryReady()
+        
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        
+        let data = try encoder.encode(registry)
+        
+        // Check if file exists
+        if let existingFileID = try await searchFile(name: Self.deviceRegistryFilename, in: folderID) {
+            try await updateFile(fileID: existingFileID, data: data)
+        } else {
+            try await createFile(name: Self.deviceRegistryFilename, data: data, folderID: folderID)
+        }
+        
+        AppLogger.sync.info("✅ Device registry updated on Drive")
+    }
+}
+

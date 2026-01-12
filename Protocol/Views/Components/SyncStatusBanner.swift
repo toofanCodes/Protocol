@@ -11,12 +11,16 @@ import SwiftUI
 /// Automatically shows/hides based on SyncEngine state.
 struct SyncStatusBanner: View {
     @EnvironmentObject private var syncEngine: SyncEngine
+    @Environment(\.modelContext) private var modelContext
     
     /// Tracks if user manually dismissed the banner
     @State private var isManuallyDismissed = false
     
     /// Track swipe offset for gesture
     @State private var dragOffset: CGFloat = 0
+    
+    /// Shows conflict resolution sheet
+    @State private var showConflictSheet = false
     
     var body: some View {
         Group {
@@ -51,6 +55,26 @@ struct SyncStatusBanner: View {
                         isAnimating: false,
                         showDismiss: true
                     )
+                    
+                case .simulatorBlocked:
+                    bannerView(
+                        icon: "desktopcomputer",
+                        message: "Sync disabled on Simulator",
+                        color: .gray,
+                        isAnimating: false,
+                        showDismiss: true
+                    )
+                    
+                case .conflictDetected(let info):
+                    conflictBanner(info: info)
+                    
+                case .awaitingUserDecision:
+                    bannerView(
+                        icon: "hourglass",
+                        message: "Waiting for decision...",
+                        color: .orange,
+                        isAnimating: true
+                    )
                 }
             }
         }
@@ -61,7 +85,61 @@ struct SyncStatusBanner: View {
             if case .syncing = newValue {
                 isManuallyDismissed = false
             }
+            // Auto-show conflict sheet when conflict detected
+            if case .conflictDetected = newValue {
+                showConflictSheet = true
+            }
         }
+        .sheet(isPresented: $showConflictSheet) {
+            if let conflict = syncEngine.pendingConflict {
+                ConflictResolutionView(conflictInfo: conflict) { resolution in
+                    syncEngine.handleConflictResolution(resolution, context: modelContext)
+                    showConflictSheet = false
+                }
+            }
+        }
+    }
+    
+    // MARK: - Conflict Banner
+    
+    @ViewBuilder
+    private func conflictBanner(info: SyncConflictInfo) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.orange)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Sync Conflict")
+                    .font(.system(size: 13, weight: .bold))
+                Text("Different device: \(info.otherDeviceName)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            
+            Spacer()
+            
+            Button {
+                showConflictSheet = true
+            } label: {
+                Text("Resolve")
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.orange)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.ultraThinMaterial)
+                .shadow(color: .orange.opacity(0.2), radius: 4, y: 2)
+        )
+        .padding(.horizontal, 16)
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
     
     // MARK: - Banner View Builder
