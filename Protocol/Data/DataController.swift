@@ -33,7 +33,9 @@ class DataController {
             AtomTemplate.self,
             AtomInstance.self,
             WorkoutSet.self,
-            UserSettings.self
+            UserSettings.self,
+            MediaCapture.self,
+            SnoringEvent.self
         ]
         
         // Exclude PersistentAuditLog in Widget to save memory (approx 10-20MB overhead)

@@ -80,6 +80,11 @@ final class AtomInstance {
     @Relationship(deleteRule: .cascade, inverse: \WorkoutSet.parentAtomInstance)
     var sets: [WorkoutSet] = []
     
+    /// One-to-One relationship with MediaCapture
+    /// When an atom is deleted, its media capture is also deleted
+    @Relationship(deleteRule: .cascade, inverse: \MediaCapture.parentAtomInstance)
+    var mediaCapture: MediaCapture?
+    
     // MARK: - Initialization
     
     init(
@@ -123,7 +128,7 @@ final class AtomInstance {
     /// Progress as a percentage (0.0 to 1.0)
     var progress: Double {
         switch inputType {
-        case .binary:
+        case .binary, .photo, .video, .audio:
             return isCompleted ? 1.0 : 0.0
             
         case .counter, .value:
@@ -145,6 +150,15 @@ final class AtomInstance {
         switch inputType {
         case .binary:
             return isCompleted ? "Done" : "Not Done"
+            
+        case .photo:
+            return isCompleted ? "Photo captured" : "Tap to capture"
+            
+        case .video:
+            return isCompleted ? "Video recorded" : "Tap to record"
+            
+        case .audio:
+            return isCompleted ? "Recording complete" : "Tap to start"
             
         case .counter:
             let current = Int(currentValue ?? 0)

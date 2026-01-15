@@ -64,6 +64,14 @@ final class MoleculeInstance {
     /// Whether this instance has been soft-deleted (archived)
     var isArchived: Bool = false
     
+    // MARK: - Orphan Properties
+    
+    /// Whether this instance is an orphan (detached from a retired parent)
+    var isOrphan: Bool = false
+    
+    /// The title of the original parent molecule (preserved for context)
+    var originalMoleculeTitle: String?
+    
     // MARK: - Relationships
     
     /// Many-to-One relationship with MoleculeTemplate
@@ -96,7 +104,9 @@ final class MoleculeInstance {
         isAllDay: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        notes: String? = nil
+        notes: String? = nil,
+        isOrphan: Bool = false,
+        originalMoleculeTitle: String? = nil
     ) {
         self.id = id
         self.scheduledDate = scheduledDate
@@ -112,6 +122,8 @@ final class MoleculeInstance {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.notes = notes
+        self.isOrphan = isOrphan
+        self.originalMoleculeTitle = originalMoleculeTitle
         self.originalScheduledDate = nil
     }
     

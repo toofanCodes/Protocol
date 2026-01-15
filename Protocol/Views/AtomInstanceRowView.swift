@@ -14,6 +14,16 @@ struct AtomInstanceRowView: View {
     @Bindable var atom: AtomInstance
     @EnvironmentObject var moleculeService: MoleculeService
     
+    @Environment(\.modelContext) private var modelContext
+    
+    @State private var showValueEntry = false
+    @State private var captureSession: CaptureSession?
+    
+    struct CaptureSession: Identifiable {
+        let id = UUID()
+        let settings: MediaCaptureSettings
+    }
+    
     var body: some View {
         HStack(spacing: 12) {
             // Input control
@@ -23,20 +33,33 @@ struct AtomInstanceRowView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(atom.title)
                     .font(.system(.body, design: .default, weight: .regular))
-                    .strikethrough(atom.isCompleted && atom.inputType == .binary)
+                    .strikethrough(atom.isCompleted && (atom.inputType == .binary || atom.inputType.isMediaType))
                     .foregroundStyle(atom.isCompleted ? .secondary : .primary)
                 
-                if atom.inputType != .binary {
+                // Show subtitle for non-binary, non-media types
+                if !atom.inputType.isMediaType && atom.inputType != .binary {
                     Text(atom.progressDisplayString)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else if atom.inputType.isMediaType && !atom.isCompleted {
+                    Text("Tap to \(atom.inputType == .photo ? "take photo" : atom.inputType == .video ? "record video" : "start recording")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if atom.inputType.isMediaType && atom.isCompleted {
+                    Text("Captured")
+                        .font(.caption)
+                        .foregroundStyle(.green)
                 }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                handleRowTap()
             }
             
             Spacer()
             
-            // Progress indicator for counter/value
-            if atom.inputType != .binary {
+            // Progress indicator for counter/value only
+            if !atom.inputType.isMediaType && atom.inputType != .binary {
                 ProgressView(value: atom.progress)
                     .frame(width: 50)
                     .tint(atom.isCompleted ? .green : Color.accentColor)
@@ -44,6 +67,66 @@ struct AtomInstanceRowView: View {
         }
         .padding(.vertical, 12)
         .contentShape(Rectangle())
+        .sheet(isPresented: $showValueEntry) {
+            AtomValueEntrySheet(atom: atom)
+        }
+        .sheet(item: $captureSession) { session in
+            MediaCaptureSheet(atomInstance: atom, settings: session.settings)
+        }
+    }
+    
+    // MARK: - Actions
+    
+    private func handleRowTap() {
+        switch atom.inputType {
+        case .binary:
+            HapticFeedback.light()
+            withAnimation(.spring(response: DesignTokens.springResponse, dampingFraction: DesignTokens.springDamping)) {
+                atom.toggleComplete()
+            }
+            
+        case .value:
+            showValueEntry = true
+            
+        case .photo, .video, .audio:
+            prepareMediaCapture()
+            
+        case .counter:
+            // No action on row tap for counter, as it has specific buttons
+            break
+        }
+    }
+    
+    private func prepareMediaCapture() {
+        var settingsToUse: MediaCaptureSettings
+        
+        // Resolve settings
+        if let templateID = atom.sourceTemplateId {
+            // Use specific lookup with simpler predicate to avoid confusion
+            if let template = try? modelContext.fetch(FetchDescriptor<AtomTemplate>()).first(where: { $0.id == templateID }) {
+                if let settings = template.mediaCaptureSettings {
+                    settingsToUse = settings
+                } else {
+                    settingsToUse = createDefaultSettings()
+                }
+            } else {
+                settingsToUse = createDefaultSettings()
+            }
+        } else {
+            settingsToUse = createDefaultSettings()
+        }
+        
+        // Set the session item to trigger the sheet
+        self.captureSession = CaptureSession(settings: settingsToUse)
+    }
+    
+    private func createDefaultSettings() -> MediaCaptureSettings {
+        switch atom.inputType {
+        case .audio: return .defaultAudio
+        case .photo: return .defaultPhoto
+        case .video: return .defaultVideo
+        default: return .defaultPhoto
+        }
     }
     
     // MARK: - Input Control
@@ -53,10 +136,7 @@ struct AtomInstanceRowView: View {
         switch atom.inputType {
         case .binary:
             Button {
-                HapticFeedback.light()
-                withAnimation(.spring(response: DesignTokens.springResponse, dampingFraction: DesignTokens.springDamping)) {
-                    atom.toggleComplete()
-                }
+                handleRowTap()
             } label: {
                 Image(systemName: atom.isCompleted ? "checkmark.circle.fill" : "circle")
                     .font(.title2)
@@ -105,10 +185,48 @@ struct AtomInstanceRowView: View {
             }
             
         case .value:
-            Image(systemName: atom.isCompleted ? "checkmark.circle.fill" : "pencil.circle")
-                .font(.title2)
-                .foregroundColor(atom.isCompleted ? .green : Color.accentColor)
-                .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
+            Button {
+                handleRowTap()
+            } label: {
+                Image(systemName: atom.isCompleted ? "checkmark.circle.fill" : "pencil.circle")
+                    .font(.title2)
+                    .foregroundColor(atom.isCompleted ? .green : Color.accentColor)
+                    .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
+            }
+            .buttonStyle(.plain)
+        
+        case .photo:
+            Button {
+                handleRowTap()
+            } label: {
+                Image(systemName: atom.isCompleted ? "checkmark.circle.fill" : "camera.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(atom.isCompleted ? .green : Color.accentColor)
+                    .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
+            }
+            .buttonStyle(.plain)
+        
+        case .video:
+            Button {
+                handleRowTap()
+            } label: {
+                Image(systemName: atom.isCompleted ? "checkmark.circle.fill" : "video.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(atom.isCompleted ? .green : Color.accentColor)
+                    .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
+            }
+            .buttonStyle(.plain)
+        
+        case .audio:
+            Button {
+                handleRowTap()
+            } label: {
+                Image(systemName: atom.isCompleted ? "checkmark.circle.fill" : "mic.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(atom.isCompleted ? .green : Color.accentColor)
+                    .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
+            }
+            .buttonStyle(.plain)
         }
     }
 }

@@ -71,6 +71,15 @@ struct SettingsHubView: View {
                 subtitle: "Help & Support",
                 color: .purple
             )
+
+            // Media
+            SettingsCardLink(
+                destination: MediaGalleryView(),
+                icon: "photo.stack.fill",
+                title: "Media",
+                subtitle: "Gallery & Storage",
+                color: .pink
+            )
             
             // Architect Tools
             SettingsCardLink(
@@ -714,7 +723,7 @@ struct CloudSyncSettingsView: View {
                     
                     Button {
                         Task {
-                            await syncEngine.performFullSync(context: modelContext)
+                            await syncEngine.performFullSync(container: DataController.shared.container)
                         }
                     } label: {
                         HStack {
@@ -747,7 +756,7 @@ struct CloudSyncSettingsView: View {
                         // Trigger sync after queuing
                         if count > 0 {
                             Task {
-                                await syncEngine.performFullSync(context: modelContext)
+                                await syncEngine.performFullSync(container: DataController.shared.container)
                             }
                         }
                     } label: {

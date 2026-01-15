@@ -86,9 +86,21 @@ final class SyncEngine: ObservableObject {
     
     // MARK: - Private
     
+    // MARK: - Private
+    
     private let lastSyncKey = "com.protocol.sync.lastSyncDate"
-    private var pendingContext: ModelContext?
+    private let lastForegroundSyncKey = "com.protocol.sync.lastForegroundSync"
+    private let minimumSyncInterval: TimeInterval = 5 * 60  // 5 minutes
     private var pendingResolution: ConflictResolution?
+    private var syncStartTime: Date?  // Tracks sync duration for history
+    
+    // Kept for conflict resolution flow
+    private var cachedContainer: ModelContainer?
+    
+    // MARK: - Dependencies (Internal for Testing)
+    
+    var driveService: DriveServiceProtocol = DriveService.shared
+    var isSignedInCheck: () -> Bool = { GoogleAuthManager.shared.isSignedIn }
     
     private init() {
         // Load last sync date
@@ -102,28 +114,49 @@ final class SyncEngine: ObservableObject {
     /// Performs a full sync in a completely sandboxed manner.
     /// This method NEVER throws and NEVER crashes the app.
     /// Safe to call from anywhere, including app launch.
-    /// - Parameter context: ModelContext for SwiftData operations
-    func performFullSyncSafely(context: ModelContext) {
+    /// Respects 5-minute throttle to prevent redundant syncs.
+    /// - Parameter container: ModelContainer for actor isolation
+    func performFullSyncSafely(container: ModelContainer) {
         // Simulator safeguard - block sync completely
         #if targetEnvironment(simulator)
         AppLogger.sync.warning("⚠️ Sync blocked on simulator to prevent data conflicts")
         self.syncStatus = .simulatorBlocked
         return
-        #endif
+        #else
         
-        // Store context for later use
-        pendingContext = context
+        // Throttle foreground syncs to prevent redundant work
+        if let lastSync = UserDefaults.standard.object(forKey: lastForegroundSyncKey) as? Date {
+            let elapsed = Date().timeIntervalSince(lastSync)
+            if elapsed < minimumSyncInterval {
+                AppLogger.sync.debug("Sync throttled: Last sync \(Int(elapsed))s ago (min: \(Int(self.minimumSyncInterval))s)")
+                return
+            }
+        }
+        
+        // Mark throttle timestamp
+        UserDefaults.standard.set(Date(), forKey: lastForegroundSyncKey)
+        
+        // Cache container for conflict resolution usage if needed
+        cachedContainer = container
         
         // Fire and forget - runs in detached task
         Task.detached(priority: .utility) { [weak self] in
-            await self?.executeSync(context: context)
+            await self?.executeSync(container: container)
         }
+        #endif
     }
     
-    /// Internal sync execution with full error handling
-    private func executeSync(context: ModelContext) async {
+    /// Force sync bypassing throttle (for manual "Sync Now" button)
+    /// - Parameter container: ModelContainer for actor isolation
+    func forceSync(container: ModelContainer) {
+        UserDefaults.standard.set(Date.distantPast, forKey: lastForegroundSyncKey)
+        performFullSyncSafely(container: container)
+    }
+    
+    /// Internal sync execution with full error handling and Actor Isolation
+    func executeSync(container: ModelContainer) async {
         // Check if user is signed in
-        let isSignedIn = await MainActor.run { GoogleAuthManager.shared.isSignedIn }
+        let isSignedIn = await MainActor.run { self.isSignedInCheck() }
         guard isSignedIn else {
             AppLogger.sync.debug("Sync skipped: User not signed in")
             return
@@ -137,11 +170,17 @@ final class SyncEngine: ObservableObject {
         }
         
         // Start sync
-        await MainActor.run { self.syncStatus = .syncing("Checking devices...") }
+        await MainActor.run {
+            self.syncStatus = .syncing("Checking devices...")
+            self.syncStartTime = Date()
+        }
+        
+        // Initialize Actor
+        let actor = SyncDataActor(container: container)
         
         do {
             // Phase 0: Check device registry for conflicts
-            let conflictInfo = try await checkForDeviceConflicts(context: context)
+            let conflictInfo = try await checkForDeviceConflicts(actor: actor)
             if let conflict = conflictInfo {
                 // Conflict detected - wait for user resolution
                 await MainActor.run {
@@ -153,22 +192,32 @@ final class SyncEngine: ObservableObject {
             }
             
             // No conflict - proceed with sync
-            await proceedWithSync(context: context)
+            await proceedWithSync(actor: actor)
             
         } catch {
             // Catch ALL errors - never propagate
             let errorMessage = error.localizedDescription
+            let errorCode = (error as? DriveError)?.code ?? "UNKNOWN"
             AppLogger.sync.error("❌ Sync failed: \(errorMessage)")
             
+            // Record failure in history
+            let duration = await MainActor.run { Date().timeIntervalSince(self.syncStartTime ?? Date()) }
             await MainActor.run {
+                SyncHistoryManager.shared.recordSync(
+                    action: .fullSync,
+                    status: .failed,
+                    duration: duration,
+                    errorCode: errorCode,
+                    errorMessage: errorMessage
+                )
                 self.syncStatus = .failed("Sync failed")
             }
         }
     }
     
     /// Checks device registry and returns conflict info if another device has synced
-    private func checkForDeviceConflicts(context: ModelContext) async throws -> SyncConflictInfo? {
-        let registry = try await DriveService.shared.fetchDeviceRegistry()
+    private func checkForDeviceConflicts(actor: SyncDataActor) async throws -> SyncConflictInfo? {
+        let registry = try await driveService.fetchDeviceRegistry()
         let currentDeviceID = await MainActor.run { DeviceIdentity.shared.deviceID }
         
         // If this device is already registered, no conflict
@@ -183,10 +232,8 @@ final class SyncEngine: ObservableObject {
         
         // Another device has synced - this is a new device trying to sync
         if let otherDevice = registry.lastOtherDevice(excluding: currentDeviceID) {
-            // Count local records
-            let localCount = await MainActor.run {
-                countLocalRecords(context: context)
-            }
+            // Count local records via Actor
+            let localCount = await actor.countLocalRecords()
             
             return SyncConflictInfo(
                 otherDeviceName: otherDevice.deviceName,
@@ -217,8 +264,14 @@ final class SyncEngine: ObservableObject {
     }
     
     /// Handles user's conflict resolution choice
-    func handleConflictResolution(_ resolution: ConflictResolution, context: ModelContext) {
+    func handleConflictResolution(_ resolution: ConflictResolution) {
         pendingConflict = nil
+        
+        guard let container = cachedContainer else {
+            AppLogger.sync.error("❌ No cached container for conflict resolution")
+            syncStatus = .failed("Internal error: No container")
+            return
+        }
         
         switch resolution {
         case .useThisDevice:
@@ -227,7 +280,8 @@ final class SyncEngine: ObservableObject {
             syncStatus = .syncing("Uploading local data...")
             
             Task.detached(priority: .utility) { [weak self] in
-                await self?.uploadLocalDataAndRegister(context: context)
+                let actor = SyncDataActor(container: container)
+                await self?.uploadLocalDataAndRegister(actor: actor)
             }
             
         case .useCloudData:
@@ -236,7 +290,8 @@ final class SyncEngine: ObservableObject {
             syncStatus = .syncing("Downloading cloud data...")
             
             Task.detached(priority: .utility) { [weak self] in
-                await self?.downloadCloudDataAndRegister(context: context)
+                let actor = SyncDataActor(container: container)
+                await self?.downloadCloudDataAndRegister(actor: actor)
             }
             
         case .cancel:
@@ -246,17 +301,15 @@ final class SyncEngine: ObservableObject {
     }
     
     /// Uploads local data and registers this device
-    private func uploadLocalDataAndRegister(context: ModelContext) async {
+    private func uploadLocalDataAndRegister(actor: SyncDataActor) async {
         do {
             // Queue all local records for upload
-            let queuedCount = await MainActor.run {
-                SyncQueueManager.shared.queueAllRecords(context: context)
-            }
+            let queuedCount = await actor.queueAllRecords()
             AppLogger.sync.info("📦 Queued \(queuedCount) records for upload")
             
             // Upload
             await MainActor.run { self.syncStatus = .syncing("Uploading \(queuedCount) records...") }
-            let uploadedCount = try await DriveService.shared.uploadPendingRecords(context: context)
+            let uploadedCount = try await driveService.uploadPendingRecords(actor: actor)
             
             // Register device
             try await registerCurrentDevice()
@@ -270,11 +323,11 @@ final class SyncEngine: ObservableObject {
     }
     
     /// Downloads cloud data and registers this device
-    private func downloadCloudDataAndRegister(context: ModelContext) async {
+    private func downloadCloudDataAndRegister(actor: SyncDataActor) async {
         do {
             // Download from cloud
             await MainActor.run { self.syncStatus = .syncing("Downloading from cloud...") }
-            let downloadedCount = try await DriveService.shared.reconcileFromRemote(context: context)
+            let downloadedCount = try await driveService.reconcileFromRemote(actor: actor)
             
             // Register device
             try await registerCurrentDevice()
@@ -289,23 +342,23 @@ final class SyncEngine: ObservableObject {
     
     /// Registers the current device in the registry
     private func registerCurrentDevice() async throws {
-        var registry = try await DriveService.shared.fetchDeviceRegistry()
+        var registry = try await driveService.fetchDeviceRegistry()
         let identity = await MainActor.run { DeviceIdentity.shared }
         registry.registerDevice(identity: identity)
-        try await DriveService.shared.updateDeviceRegistry(registry)
+        try await driveService.updateDeviceRegistry(registry)
         AppLogger.sync.info("✅ Device registered: \(identity.shortDescription)")
     }
     
     /// Proceeds with normal sync after conflict check passes
-    private func proceedWithSync(context: ModelContext) async {
+    private func proceedWithSync(actor: SyncDataActor) async {
         do {
             // Phase 1: Pull remote changes
             await MainActor.run { self.syncStatus = .syncing("Downloading...") }
-            let downloadedCount = try await DriveService.shared.reconcileFromRemote(context: context)
+            let downloadedCount = try await driveService.reconcileFromRemote(actor: actor)
             
             // Phase 2: Push local changes
             await MainActor.run { self.syncStatus = .syncing("Uploading...") }
-            let uploadedCount = try await DriveService.shared.uploadPendingRecords(context: context)
+            let uploadedCount = try await driveService.uploadPendingRecords(actor: actor)
             
             // Update device registry
             try await registerCurrentDevice()
@@ -314,9 +367,19 @@ final class SyncEngine: ObservableObject {
             
         } catch {
             let errorMessage = error.localizedDescription
+            let errorCode = (error as? DriveError)?.code ?? "UNKNOWN"
             AppLogger.sync.error("❌ Sync failed: \(errorMessage)")
             
+            // Record failure in history
+            let duration = await MainActor.run { Date().timeIntervalSince(self.syncStartTime ?? Date()) }
             await MainActor.run {
+                SyncHistoryManager.shared.recordSync(
+                    action: .fullSync,
+                    status: .failed,
+                    duration: duration,
+                    errorCode: errorCode,
+                    errorMessage: errorMessage
+                )
                 self.syncStatus = .failed("Sync failed")
             }
         }
@@ -325,9 +388,20 @@ final class SyncEngine: ObservableObject {
     /// Finishes sync with success status
     private func finishSync(downloaded: Int, uploaded: Int) async {
         let now = Date()
+        let duration = await MainActor.run { Date().timeIntervalSince(self.syncStartTime ?? Date()) }
+        
         await MainActor.run {
             self.lastSyncDate = now
             UserDefaults.standard.set(now, forKey: self.lastSyncKey)
+            
+            // Record success in history
+            SyncHistoryManager.shared.recordSync(
+                action: .fullSync,
+                status: .success,
+                uploaded: uploaded,
+                downloaded: downloaded,
+                duration: duration
+            )
             
             let message = downloaded + uploaded > 0
                 ? "Synced \(downloaded)↓ \(uploaded)↑"
@@ -347,8 +421,8 @@ final class SyncEngine: ObservableObject {
     }
     
     /// Legacy method - now delegates to safe version
-    func performFullSync(context: ModelContext) async {
-        performFullSyncSafely(context: context)
+    func performFullSync(container: ModelContainer) async {
+        performFullSyncSafely(container: container)
     }
     
     /// Clears error state

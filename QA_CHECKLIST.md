@@ -32,11 +32,17 @@
 - [ ] Large backup (1000+ instances) completes without timeout
 - [ ] Corrupted backup file shows error, doesn't crash
 
-### Sync Boundary
-- [ ] Widget and main app show same data
-- [ ] Complete in widget → main app reflects change
-- [ ] Complete in main app → widget updates
-- [ ] No race conditions with simultaneous edits
+### Sync Boundary (Cloud & Widget)
+- [ ] **Widget Sync**: Complete in widget → Main app updates immediately
+- [ ] **Main App Sync**: Complete in app → Widget updates immediately
+- [ ] **Google Drive Auth**: Sign in / Sign out works; Token refresh handles expiry
+- [ ] **Conflict Resolution**:
+    - [ ] Edit same item on two devices → "Conflict Detected" UI appears
+    - [ ] "Keep Local" preserves current device changes
+    - [ ] "Keep Remote" overwrites with cloud version
+- [ ] **Device Identity**:
+    - [ ] Register new device → Appears in "Devices" list (if visible)
+    - [ ] Simulator block (Warning log) active in Simulator builds
 
 ---
 
@@ -137,6 +143,26 @@
 
 ---
 
+## 📸 Media & Gallery
+
+- [ ] **Permissions**:
+    - [ ] Camera permission prompt appears on first use
+    - [ ] Microphone permission prompt appears on first use
+    - [ ] Photo Library permission prompt appears on save
+- [ ] **Photo Capture**: Take photo → Saved to disk → Thumbnail appears in atom
+- [ ] **Video Capture**: Record video → Playback works → Persisted after relaunch
+- [ ] **Audio/Snoring**:
+    - [ ] Record audio → Waveform visualizer active
+    - [ ] Snoring detection triggers on loud input
+    - [ ] Playback works
+- [ ] **Gallery View**:
+    - [ ] Grid shows all types (Photo/Video/Audio)
+    - [ ] Tapping item opens detail view
+    - [ ] Delete from gallery removes from atom
+- [ ] **Privacy**: Media files are excluded from backup if "Include Media" disabled (if applicable)
+
+---
+
 ## 🧪 Automated Test Verification
 
 Before release, run full test suite:
@@ -150,6 +176,16 @@ All tests must pass:
 - [ ] BackupManagerTests (7)
 - [ ] MoleculeServiceTests (7)
 - [ ] ModelTests (18)
+- [ ] SyncEngineTests (8) [NEW]
+- [ ] DeviceIdentityTests (10) [NEW]
+- [ ] DeviceRegistryTests (12) [NEW]
+- [ ] InsightsViewModelTests (6) [NEW]
+- [ ] SyncDataIntegrityTests
+- [ ] SyncJSONRoundTripTests
+- [ ] SyncQueueManagerTests
+- [ ] MediaCaptureModelTests
+- [ ] MediaCaptureSettingsTests
+- [ ] AuditLogViewModelTests
 
 ---
 

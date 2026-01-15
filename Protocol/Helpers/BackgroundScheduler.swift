@@ -58,7 +58,9 @@ final class BackgroundScheduler {
         // Schedule for early next morning (best time for daily habit apps)
         let calendar = Calendar.current
         var components = calendar.dateComponents([.year, .month, .day], from: Date())
-        components.day! += 1
+        if let day = components.day {
+            components.day = day + 1
+        }
         components.hour = 5  // 5 AM next day
         components.minute = 0
         
@@ -71,7 +73,9 @@ final class BackgroundScheduler {
         
         do {
             try BGTaskScheduler.shared.submit(request)
-            AppLogger.background.info("Scheduled background refresh for \(request.earliestBeginDate!)")
+            if let earliestDate = request.earliestBeginDate {
+                AppLogger.background.info("Scheduled background refresh for \(earliestDate)")
+            }
         } catch {
             AppLogger.background.error("Failed to schedule background refresh: \(error.localizedDescription)")
         }

@@ -81,6 +81,31 @@ final class AtomTemplate {
         set { themeColorHex = newValue.toHex() }
     }
     
+    // MARK: - Media Capture Properties
+    
+    /// Type of media capture: nil (none), "photo", "video", or "audio"
+    var mediaCaptureType: String?
+    
+    /// JSON-encoded MediaCaptureSettings configuration
+    var mediaCaptureSettingsJSON: String?
+    
+    /// Computed accessor for media capture settings (not persisted)
+    @Transient var mediaCaptureSettings: MediaCaptureSettings? {
+        get {
+            guard let json = mediaCaptureSettingsJSON else { return nil }
+            return MediaCaptureSettings.fromJSON(json)
+        }
+        set {
+            mediaCaptureSettingsJSON = newValue?.toJSON()
+            mediaCaptureType = newValue?.captureType.rawValue
+        }
+    }
+    
+    /// Whether this atom has media capture enabled
+    @Transient var hasMediaCapture: Bool {
+        mediaCaptureType != nil
+    }
+    
     // MARK: - Relationships
     
     /// Belongs to one MoleculeTemplate

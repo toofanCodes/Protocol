@@ -76,6 +76,10 @@ struct MoleculeBlockView: View {
                     
                     Spacer()
                     
+                    if instance.isOrphan {
+                         Text("👶").font(.caption)
+                    }
+                    
                     if instance.isCompleted {
                         Image(systemName: "checkmark.circle.fill")
                         .font(.caption)

@@ -11,7 +11,6 @@ import SwiftUI
 /// Automatically shows/hides based on SyncEngine state.
 struct SyncStatusBanner: View {
     @EnvironmentObject private var syncEngine: SyncEngine
-    @Environment(\.modelContext) private var modelContext
     
     /// Tracks if user manually dismissed the banner
     @State private var isManuallyDismissed = false
@@ -93,7 +92,7 @@ struct SyncStatusBanner: View {
         .sheet(isPresented: $showConflictSheet) {
             if let conflict = syncEngine.pendingConflict {
                 ConflictResolutionView(conflictInfo: conflict) { resolution in
-                    syncEngine.handleConflictResolution(resolution, context: modelContext)
+                    syncEngine.handleConflictResolution(resolution)
                     showConflictSheet = false
                 }
             }

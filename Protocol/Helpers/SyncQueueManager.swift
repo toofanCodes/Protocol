@@ -160,7 +160,7 @@ class SyncQueueManager: ObservableObject {
     
     // MARK: - Persistence
     
-    private func saveQueue() {
+    func saveQueue() {
         if let encoded = try? JSONEncoder().encode(queue) {
             UserDefaults.standard.set(encoded, forKey: userDefaultsKey)
         }
@@ -173,9 +173,9 @@ class SyncQueueManager: ObservableObject {
         }
     }
     
-    // MARK: - Helper (Private)
+    // MARK: - Helper (Internal)
     
-    private func insertOrUpdate(_ item: PendingSyncItem) {
+    func insertOrUpdate(_ item: PendingSyncItem) {
         // Remove existing entry for this ID if present (to update it)
         queue.removeAll { $0 == item }
         queue.append(item)

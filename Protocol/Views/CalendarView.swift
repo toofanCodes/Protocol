@@ -1007,6 +1007,11 @@ struct AllDayBanner: View {
                         .foregroundStyle(.secondary)
                 }
                 
+                // Orphan indicator
+                if instance.isOrphan {
+                     Text("👶").font(.caption)
+                }
+                
                 // Completion indicator
                 if instance.isCompleted {
                     Image(systemName: "checkmark.circle.fill")

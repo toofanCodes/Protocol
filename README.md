@@ -59,6 +59,8 @@ Protocol is a native iOS application designed to help users build **compound rou
 ### Core Habit Tracking
 - 📦 **Contextual Tracking** — Group related habits into powerful routines
 - ⏰ **Smart Reminders** — Multiple alert offsets per routine (15 min, 1 hour, etc.)
+- ☁️ **Cloud Sync (Beta)** — Bidirectional Google Drive sync with conflict resolution
+- 🛡️ **Data Safety** — Orphan Recovery tools, Soft-Delete archiving, and Atomic Audit Logs
 - 📱 **Home Screen Widget** — View and complete tasks directly from home screen
 - 💾 **Offline First** — All data stored locally with SwiftData
 - 🎨 **All-Day Events** — Support for habits without specific times
@@ -75,8 +77,13 @@ Protocol is a native iOS application designed to help users build **compound rou
 - 🏋️ **Workout Tracking** — Sets, reps, weight logging for exercise atoms
 - 💪 **Progress History** — Track improvement over time
 
+### Rich Media
+- 📸 **Media Capture** — Attach photos, videos, and audio notes to any task
+- 💤 **Snoring Detection** — Analyze sleep quality with audio processing and intensity scoring
+- 🖼️ **Gallery View** — Browse all your captured moments in a visual grid
+
 ### Data Management
-- 🏗️ **Blueprint Architect** — Bulk import habits via CSV with recurrence & compound support
+- 🏗️ **Blueprint Architect** — Bulk import habits via CSV (Format: `Time,Name,Atoms|Separated,IsAllDay`)
 - 💿 **Encrypted Backups** — AES-GCM encrypted local backups with password protection
 - ☁️ **Device-Aware Sync** — Google Drive sync that recognizes multiple devices, preventing conflicts and allowing users to resolve them by choosing between local or cloud data.
 - 📋 **Audit Logging** — Complete history of data changes for debugging

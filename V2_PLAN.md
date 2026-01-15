@@ -1,7 +1,7 @@
 # Protocol V2 Plan: Bio Tracker with Fitbit Integration
 
-> **Status:** On Hold  
-> **Created:** January 2026  
+> **Status:** Phase 1 (Sync) in Beta; Phase 2 (Fitbit) Next Up
+> **Created:** January 2026
 > **Goal:** Transform Protocol from a data recorder to a bio tracker with Fitbit API integration
 
 ---

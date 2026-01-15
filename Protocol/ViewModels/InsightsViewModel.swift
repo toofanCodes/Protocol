@@ -137,6 +137,7 @@ final class InsightsViewModel: ObservableObject {
     
     // MARK: - Dependencies
     private var analyticsService: AnalyticsQueryService?
+    var currentDateProvider: () -> Date = { Date() }
     
     // MARK: - Initialization
     
@@ -173,7 +174,7 @@ final class InsightsViewModel: ObservableObject {
     
     private func calculateDateRange() -> (start: Date, end: Date) {
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
+        let today = calendar.startOfDay(for: currentDateProvider())
         
         // Base logic for 0 offset
         let baseStart: Date

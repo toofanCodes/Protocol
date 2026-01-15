@@ -16,59 +16,20 @@ struct AtomTemplateEditorView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     
-    // MARK: - Properties
+    // MARK: - ViewModel
     
-    let parentTemplate: MoleculeTemplate
-    var existingAtom: AtomTemplate?
+    @StateObject private var viewModel: AtomTemplateEditorViewModel
     
-    // MARK: - State
-    
-    @State private var title: String = ""
-    @State private var inputType: AtomInputType = .binary
-    @State private var targetValue: String = ""
-    @State private var unit: String = ""
-    @State private var videoURL: String = ""
-    
-    // Workout-specific state
-    @State private var isWorkoutExercise: Bool = false
-    @State private var targetSets: String = ""
-    @State private var targetReps: String = ""
-    @State private var restTime: String = ""
-    
-    // Original values for change detection
-    @State private var originalTitle: String = ""
-    @State private var originalTargetValue: String = ""
-    @State private var originalUnit: String = ""
-    @State private var originalVideoURL: String = ""
-    @State private var originalTargetSets: String = ""
-    @State private var originalTargetReps: String = ""
-    @State private var originalRestTime: String = ""
-    
-    // Dialog state
-    @State private var showingCascadeDialog = false
-    @State private var showingIconEditor = false
-    
-    // Icon state
-    @State private var iconSymbol: String = ""
-    @State private var iconFrame: IconFrameStyle = .circle
-    @State private var themeColor: Color = .blue
-    
-    // Query for future instances
+    // Query for future instances (needed for cascade saving)
     @Query private var allAtomInstances: [AtomInstance]
     
-    private var isEditing: Bool {
-        existingAtom != nil
-    }
+    // MARK: - Initialization
     
-    private var hasStructuralChanges: Bool {
-        guard isEditing else { return false }
-        return title != originalTitle ||
-               targetValue != originalTargetValue ||
-               unit != originalUnit ||
-               videoURL != originalVideoURL ||
-               targetSets != originalTargetSets ||
-               targetReps != originalTargetReps ||
-               restTime != originalRestTime
+    init(parentTemplate: MoleculeTemplate, existingAtom: AtomTemplate? = nil) {
+        _viewModel = StateObject(wrappedValue: AtomTemplateEditorViewModel(
+            parentTemplate: parentTemplate,
+            existingAtom: existingAtom
+        ))
     }
     
     // MARK: - Body
@@ -81,13 +42,13 @@ struct AtomTemplateEditorView: View {
                     HStack {
                         Spacer()
                         Button {
-                            showingIconEditor = true
+                            viewModel.showingIconEditor = true
                         } label: {
                             AvatarView(
-                                text: iconSymbol,
-                                fallbackText: title.isEmpty ? "?" : title,
-                                shape: iconFrame,
-                                color: themeColor,
+                                text: viewModel.iconSymbol,
+                                fallbackText: viewModel.title.isEmpty ? "?" : viewModel.title,
+                                shape: viewModel.iconFrame,
+                                color: viewModel.themeColor,
                                 size: 60
                             )
                         }
@@ -97,79 +58,79 @@ struct AtomTemplateEditorView: View {
                     .listRowBackground(Color.clear)
                 } footer: {
                     Text("Tap to customize icon")
-                        .frame(maxWidth: .infinity, alignment: .center)
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
                 
                 // Title Section
                 Section("Task Name") {
-                    TextField("e.g., Drink Water", text: $title)
+                    TextField("e.g., Drink Water", text: $viewModel.title)
                 }
                 
                 // Input Type Section
                 Section {
-                    Picker("Input Type", selection: $inputType) {
+                    Picker("Input Type", selection: $viewModel.inputType) {
                         ForEach(AtomInputType.allCases) { type in
                             Label(type.displayName, systemImage: type.iconName)
-                                .tag(type)
+                            .tag(type)
                         }
                     }
                     .pickerStyle(.inline)
                 } header: {
                     Text("Tracking Method")
                 } footer: {
-                    Text(inputType.description)
-                        .font(.caption)
+                    Text(viewModel.inputType.description)
+                    .font(.caption)
                 }
                 
                 // Target Value Section (for counter/value types)
-                if inputType != .binary {
+                if viewModel.inputType != .binary {
                     Section("Target") {
                         HStack {
-                            TextField("Value", text: $targetValue)
-                                .keyboardType(.decimalPad)
+                            TextField("Value", text: $viewModel.targetValue)
+                            .keyboardType(.decimalPad)
                             
-                            TextField("Unit (optional)", text: $unit)
-                                .frame(maxWidth: 120)
+                            TextField("Unit (optional)", text: $viewModel.unit)
+                            .frame(maxWidth: 120)
                         }
                     }
                 }
                 
                 // Workout Configuration (for value type)
-                if inputType == .value {
+                if viewModel.inputType == .value {
                     Section {
-                        Toggle("Timed Sessions", isOn: $isWorkoutExercise)
+                        Toggle("Timed Sessions", isOn: $viewModel.isWorkoutExercise)
                     } footer: {
                         Text("Enable to track sets, reps, and rest intervals between timed sessions.")
                     }
                     
-                    if isWorkoutExercise {
+                    if viewModel.isWorkoutExercise {
                         Section("Workout Settings") {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Sets")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    TextField("4", text: $targetSets)
-                                        .keyboardType(.numberPad)
-                                        .textFieldStyle(.roundedBorder)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    TextField("4", text: $viewModel.targetSets)
+                                    .keyboardType(.numberPad)
+                                    .textFieldStyle(.roundedBorder)
                                 }
                                 
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Reps")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    TextField("12", text: $targetReps)
-                                        .keyboardType(.numberPad)
-                                        .textFieldStyle(.roundedBorder)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    TextField("12", text: $viewModel.targetReps)
+                                    .keyboardType(.numberPad)
+                                    .textFieldStyle(.roundedBorder)
                                 }
                                 
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Rest (sec)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    TextField("60", text: $restTime)
-                                        .keyboardType(.numberPad)
-                                        .textFieldStyle(.roundedBorder)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    TextField("60", text: $viewModel.restTime)
+                                    .keyboardType(.numberPad)
+                                    .textFieldStyle(.roundedBorder)
                                 }
                             }
                         }
@@ -178,25 +139,75 @@ struct AtomTemplateEditorView: View {
                 
                 // Instructional Video Section
                 Section("Instructional Video") {
-                    TextField("Paste YouTube/Video URL here", text: $videoURL)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    TextField("Paste YouTube/Video URL here", text: $viewModel.videoURL)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                }
+                
+                // Audio Recording Settings (only for audio type)
+                if viewModel.inputType == .audio {
+                    Section {
+                        Toggle("Snoring Detection", isOn: $viewModel.enableSnoringDetection)
+                        
+                        if viewModel.enableSnoringDetection {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("Sensitivity")
+                                    Spacer()
+                                    Text("\(Int(viewModel.snoringThreshold))%")
+                                    .foregroundStyle(.secondary)
+                                }
+                                Slider(value: $viewModel.snoringThreshold, in: 20...80, step: 5)
+                            }
+                        }
+                        
+                        Picker("Duration", selection: $viewModel.recordingDuration) {
+                            ForEach(RecordingDuration.presets, id: \.self) { duration in
+                                Text(duration.displayString).tag(duration)
+                            }
+                        }
+                        
+                        Toggle("Save Full Recording", isOn: $viewModel.saveFullRecording)
+                    } header: {
+                        Label("Audio Settings", systemImage: "waveform")
+                    } footer: {
+                        if viewModel.saveFullRecording {
+                            Text("Full recordings use ~20MB per night. Recommended: keep off to save only snoring clips (~2MB).")
+                            .foregroundStyle(.orange)
+                        } else {
+                            Text("Only snoring clips will be saved. Enable snoring detection to track sleep quality.")
+                        }
+                    }
+                }
+                
+                // Photo/Video info
+                if viewModel.inputType == .photo || viewModel.inputType == .video {
+                    Section {
+                        HStack {
+                            Image(systemName: viewModel.inputType == .photo ? "camera.fill" : "video.fill")
+                            .foregroundStyle(.blue)
+                            Text("Tap the task to capture \(viewModel.inputType == .photo ? "a photo" : "video")")
+                            .foregroundStyle(.secondary)
+                        }
+                    } footer: {
+                        Text("Media will be stored locally on your device.")
+                    }
                 }
                 
                 // Preview Section
                 Section("Preview") {
                     AtomPreviewRow(
-                        title: title.isEmpty ? "Task Name" : title,
-                        inputType: inputType,
-                        targetValue: Double(targetValue),
-                        unit: unit.isEmpty ? nil : unit,
-                        targetSets: isWorkoutExercise ? Int(targetSets) : nil,
-                        targetReps: isWorkoutExercise ? Int(targetReps) : nil
+                        title: viewModel.title.isEmpty ? "Task Name" : viewModel.title,
+                        inputType: viewModel.inputType,
+                        targetValue: Double(viewModel.targetValue),
+                        unit: viewModel.unit.isEmpty ? nil : viewModel.unit,
+                        targetSets: viewModel.isWorkoutExercise ? Int(viewModel.targetSets) : nil,
+                        targetReps: viewModel.isWorkoutExercise ? Int(viewModel.targetReps) : nil
                     )
                 }
             }
-            .navigationTitle(isEditing ? "Edit Task" : "New Task")
+            .navigationTitle(viewModel.isEditing ? "Edit Task" : "New Task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -206,27 +217,29 @@ struct AtomTemplateEditorView: View {
                 }
                 
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isEditing ? "Save" : "Add") {
-                        saveAtom()
+                    Button(viewModel.isEditing ? "Save" : "Add") {
+                        viewModel.save(context: modelContext) {
+                            dismiss()
+                        }
                     }
-                    .disabled(title.isEmpty)
+                    .disabled(viewModel.title.isEmpty)
                     .fontWeight(.semibold)
                 }
             }
-            .onAppear {
-                loadExistingValues()
-            }
             .confirmationDialog(
                 "Update Future Events?",
-                isPresented: $showingCascadeDialog,
+                isPresented: $viewModel.showingCascadeDialog,
                 titleVisibility: .visible
             ) {
                 Button("Update This Template Only") {
-                    saveTemplateOnly()
+                    viewModel.saveTemplateOnly(context: modelContext)
+                    dismiss()
                 }
                 
                 Button("Update Template & All Future Events") {
-                    saveWithCascade()
+                    viewModel.saveWithCascade(context: modelContext, allInstances: allAtomInstances) {
+                        dismiss()
+                    }
                 }
                 
                 Button("Cancel", role: .cancel) {}
@@ -234,164 +247,14 @@ struct AtomTemplateEditorView: View {
                 Text("You've changed structural properties. Do you want to update all future scheduled instances of this task?")
             }
         }
-        .sheet(isPresented: $showingIconEditor) {
+        .sheet(isPresented: $viewModel.showingIconEditor) {
             IconEditorSheet(
-                iconSymbol: $iconSymbol,
-                iconFrame: $iconFrame,
-                themeColor: $themeColor,
-                fallbackText: title.isEmpty ? "?" : title
+                iconSymbol: $viewModel.iconSymbol,
+                iconFrame: $viewModel.iconFrame,
+                themeColor: $viewModel.themeColor,
+                fallbackText: viewModel.title.isEmpty ? "?" : viewModel.title
             )
         }
-    }
-    
-    // MARK: - Private Methods
-    
-    private func loadExistingValues() {
-        guard let atom = existingAtom else { return }
-        
-        title = atom.title
-        inputType = atom.inputType
-        videoURL = atom.videoURL ?? ""
-        
-        if let target = atom.targetValue {
-            targetValue = String(format: target.truncatingRemainder(dividingBy: 1) == 0 ? "%.0f" : "%.1f", target)
-        }
-        
-        unit = atom.unit ?? ""
-        
-        // Load workout settings
-        if let sets = atom.targetSets {
-            targetSets = String(sets)
-            isWorkoutExercise = true
-        }
-        
-        if let reps = atom.targetReps {
-            targetReps = String(reps)
-        }
-        
-        if let rest = atom.defaultRestTime {
-            restTime = String(Int(rest))
-        }
-        
-        // Save originals for change detection
-        originalTitle = title
-        originalTargetValue = targetValue
-        originalUnit = unit
-        originalVideoURL = videoURL
-        originalTargetSets = targetSets
-        originalTargetReps = targetReps
-        originalRestTime = restTime
-        
-        // Load icon values
-        iconSymbol = atom.iconSymbol ?? ""
-        iconFrame = atom.iconFrame
-        themeColor = atom.themeColor
-    }
-    
-    private func saveAtom() {
-        if isEditing && hasStructuralChanges {
-            // Show cascade dialog
-            showingCascadeDialog = true
-        } else {
-            // New atom or no changes - just save
-            saveTemplateOnly()
-        }
-    }
-    
-    private func saveTemplateOnly() {
-        let target = Double(targetValue)
-        let unitValue = unit.isEmpty ? nil : unit
-        let videoValue = videoURL.isEmpty ? nil : videoURL
-        
-        // Workout values
-        let sets = isWorkoutExercise ? Int(targetSets) : nil
-        let reps = isWorkoutExercise ? Int(targetReps) : nil
-        let rest = isWorkoutExercise ? TimeInterval(restTime) : nil
-        
-        if let existingAtom = existingAtom {
-            // Update existing template
-            existingAtom.title = title
-            existingAtom.inputType = inputType
-            existingAtom.targetValue = inputType == .binary ? nil : target
-            existingAtom.unit = inputType == .binary ? nil : unitValue
-            existingAtom.videoURL = videoValue
-            existingAtom.targetSets = sets
-            existingAtom.targetReps = reps
-            existingAtom.defaultRestTime = rest
-            existingAtom.iconSymbol = iconSymbol.isEmpty ? nil : iconSymbol
-            existingAtom.iconFrame = iconFrame
-            existingAtom.themeColor = themeColor
-        } else {
-            // Create new
-            let nextOrder = (parentTemplate.atomTemplates.map(\.order).max() ?? -1) + 1
-            
-            let newAtom = AtomTemplate(
-                title: title,
-                inputType: inputType,
-                targetValue: inputType == .binary ? nil : target,
-                unit: inputType == .binary ? nil : unitValue,
-                order: nextOrder,
-                targetSets: sets,
-                targetReps: reps,
-                defaultRestTime: rest,
-                videoURL: videoValue,
-                parentMoleculeTemplate: parentTemplate,
-                iconSymbol: iconSymbol.isEmpty ? nil : iconSymbol,
-                iconFrame: iconFrame
-            )
-            newAtom.themeColor = themeColor
-            
-            modelContext.insert(newAtom)
-            parentTemplate.atomTemplates.append(newAtom)
-        }
-        
-        try? modelContext.save()
-        dismiss()
-    }
-    
-    private func saveWithCascade() {
-        guard let existingAtom = existingAtom else {
-            saveTemplateOnly()
-            return
-        }
-        
-        let target = Double(targetValue)
-        let unitValue = unit.isEmpty ? nil : unit
-        let videoValue = videoURL.isEmpty ? nil : videoURL
-        let sets = isWorkoutExercise ? Int(targetSets) : nil
-        let reps = isWorkoutExercise ? Int(targetReps) : nil
-        let rest = isWorkoutExercise ? TimeInterval(restTime) : nil
-        
-        // 1. Update Template
-        existingAtom.title = title
-        existingAtom.inputType = inputType
-        existingAtom.targetValue = inputType == .binary ? nil : target
-        existingAtom.unit = inputType == .binary ? nil : unitValue
-        existingAtom.videoURL = videoValue
-        existingAtom.targetSets = sets
-        existingAtom.targetReps = reps
-        existingAtom.defaultRestTime = rest
-        
-        // 2. Cascade to Future Instances
-        let today = Calendar.current.startOfDay(for: Date())
-        let futureInstances = allAtomInstances.filter { instance in
-            instance.sourceTemplateId == existingAtom.id &&
-            instance.parentMoleculeInstance?.scheduledDate ?? Date.distantPast >= today
-        }
-        
-        for instance in futureInstances {
-            instance.title = title
-            instance.inputType = inputType
-            instance.targetValue = inputType == .binary ? nil : target
-            instance.unit = inputType == .binary ? nil : unitValue
-            instance.videoURL = videoValue
-            instance.targetSets = sets
-            instance.targetReps = reps
-            instance.defaultRestTime = rest
-        }
-        
-        try? modelContext.save()
-        dismiss()
     }
 }
 
@@ -441,6 +304,21 @@ struct AtomPreviewRow: View {
                         }
                     }
                 }
+                
+            case .photo:
+                Image(systemName: "camera.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                
+            case .video:
+                Image(systemName: "video.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                
+            case .audio:
+                Image(systemName: "mic.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
             }
             
             // Title

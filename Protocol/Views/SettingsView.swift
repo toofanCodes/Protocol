@@ -184,7 +184,20 @@ struct SettingsView: View {
                     Text("Customize the fanfare when you complete habits.")
                 }
                 
-                // MARK: - Section 2: Resources
+                // MARK: - Section 2: Media
+                Section {
+                    NavigationLink {
+                        MediaGalleryView()
+                    } label: {
+                        Label("Media Gallery", systemImage: "photo.stack")
+                    }
+                } header: {
+                    Label("Media", systemImage: "photo.on.rectangle")
+                } footer: {
+                    Text("View and manage your captured moments.")
+                }
+                
+                // MARK: - Section 3: Resources
                 Section {
                     NavigationLink {
                         FieldManualView()
@@ -318,6 +331,18 @@ struct SettingsView: View {
                         AuditLogViewer()
                     } label: {
                         Label("Audit Log", systemImage: "doc.text.magnifyingglass")
+                    }
+                    
+                    NavigationLink {
+                        SyncHistoryView()
+                    } label: {
+                        Label("Sync History", systemImage: "clock.arrow.circlepath")
+                    }
+                    
+                    NavigationLink {
+                        SleepAnalyticsView()
+                    } label: {
+                        Label("Sleep Analytics", systemImage: "moon.zzz.fill")
                     }
                     
                     Button {

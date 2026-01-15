@@ -10,9 +10,18 @@ import GoogleSignIn
 import GoogleAPIClientForREST_Drive
 import SwiftData
 
+/// Protocol defining the interface for Google Drive operations.
+/// usage: Allows mocking DriveService for SyncEngine tests.
+protocol DriveServiceProtocol: Actor {
+    func uploadPendingRecords(actor: SyncDataActor) async throws -> Int
+    func reconcileFromRemote(actor: SyncDataActor) async throws -> Int
+    func fetchDeviceRegistry() async throws -> DeviceRegistry
+    func updateDeviceRegistry(_ registry: DeviceRegistry) async throws
+}
+
 /// Actor responsible for all Google Drive API interactions.
 /// Ensures thread safety for network calls and manages auth injection.
-actor DriveService {
+actor DriveService: DriveServiceProtocol {
     static let shared = DriveService()
     
     // MARK: - Properties
@@ -57,13 +66,16 @@ actor DriveService {
     
     // MARK: - Public API: Upload Pipeline
     
-    /// Uploads all pending records from the sync queue to Google Drive.
-    /// - Parameter context: ModelContext to fetch records from SwiftData
-    /// - Returns: Number of successfully uploaded records
-    func uploadPendingRecords(context: ModelContext) async throws -> Int {
+    // MARK: - Public API: Upload Pipeline (Actor Safe)
+    
+    /// Uploads all pending records using SyncDataActor for safe data access.
+    func uploadPendingRecords(actor: SyncDataActor) async throws -> Int {
         try await configureService()
         
         let folderID = try await ensureRemoteDirectoryReady()
+        
+        // Count queue items (safe actor call)
+        // Actually SyncQueueManager is thread safe, but we need the data serialization from actor
         let queue = await MainActor.run { SyncQueueManager.shared.getPriorityQueue() }
         
         guard !queue.isEmpty else {
@@ -74,311 +86,58 @@ actor DriveService {
         
         for item in queue {
             do {
-                // Fetch record from SwiftData
-                guard let jsonData = try await fetchAndSerialize(item: item, context: context) else {
-                    // Record not found (deleted locally) - upload tombstone before removing from queue
+                // Fetch & Serialize via Actor
+                guard let jsonData = await actor.serializeItem(item) else {
+                    // Record not found - upload tombstone
                     AppLogger.backup.info("📋 Record deleted locally, uploading tombstone: \(item.modelType)_\(item.syncID)")
                     
                     let tombstone: [String: Any] = [
                         "syncID": item.syncID.uuidString,
                         "isDeleted": true,
+                        // Formatter creation is cheap
                         "lastModified": ISO8601DateFormatter().string(from: Date())
                     ]
                     
-                    guard let tombstoneData = try? JSONSerialization.data(withJSONObject: tombstone) else {
-                        AppLogger.backup.error("❌ Failed to serialize tombstone for \(item.syncID)")
-                        continue
-                    }
+                    guard let tombstoneData = try? JSONSerialization.data(withJSONObject: tombstone) else { continue }
                     
-                    // Upload tombstone to Drive
-                    do {
-                        try await uploadRecord(item: item, data: tombstoneData, folderID: folderID)
-                        AppLogger.backup.info("✅ Tombstone uploaded successfully")
-                    } catch {
-                        AppLogger.backup.warning("⚠️ Failed to upload tombstone: \(error.localizedDescription)")
-                        // Don't remove from queue if tombstone upload failed
-                        continue
-                    }
-                    
-                    // Only remove from queue after successful tombstone upload
+                    try await uploadRecord(item: item, data: tombstoneData, folderID: folderID)
                     await MainActor.run { SyncQueueManager.shared.removeFromQueue(item) }
                     continue
                 }
                 
-                // Upload to Drive
+                // Upload
                 try await uploadRecord(item: item, data: jsonData, folderID: folderID)
                 
-                // Success: Remove from queue
+                // Success
                 await MainActor.run { SyncQueueManager.shared.removeFromQueue(item) }
                 uploadedCount += 1
                 
             } catch {
-                // Log error but continue with other items
                 AppLogger.backup.warning("⚠️ Failed to upload \(item.modelType)_\(item.syncID): \(error.localizedDescription)")
             }
         }
         
         return uploadedCount
     }
-    
-    // MARK: - Private: Record Fetching
-    
-    /// Fetches a record from SwiftData by ID and type, then serializes to JSON
-    private func fetchAndSerialize(item: SyncQueueManager.PendingSyncItem, context: ModelContext) async throws -> Data? {
-        // Must run on MainActor since context is main-actor bound
-        return try await MainActor.run {
-            switch item.modelType {
-            case "MoleculeTemplate":
-                let id = item.syncID
-                let descriptor = FetchDescriptor<MoleculeTemplate>(predicate: #Predicate { $0.id == id })
-                guard let record = try context.fetch(descriptor).first else { return nil }
-                return record.toSyncJSON()
-                
-            case "MoleculeInstance":
-                let id = item.syncID
-                let descriptor = FetchDescriptor<MoleculeInstance>(predicate: #Predicate { $0.id == id })
-                guard let record = try context.fetch(descriptor).first else { return nil }
-                return record.toSyncJSON()
-                
-            case "AtomTemplate":
-                let id = item.syncID
-                let descriptor = FetchDescriptor<AtomTemplate>(predicate: #Predicate { $0.id == id })
-                guard let record = try context.fetch(descriptor).first else { return nil }
-                return record.toSyncJSON()
-                
-            default:
-                AppLogger.backup.warning("⚠️ Unknown model type: \(item.modelType)")
-                return nil
-            }
-        }
-    }
-    
-    // MARK: - Private: Upload Logic
-    
-    /// Uploads a single record: creates or updates based on existence
-    private func uploadRecord(item: SyncQueueManager.PendingSyncItem, data: Data, folderID: String) async throws {
-        let filename = await MainActor.run { SyncQueueManager.shared.generateFilename(for: item) }
-        
-        // Check if file already exists
-        if let existingFileID = try await searchFile(name: filename, in: folderID) {
-            // Update existing file
-            try await updateFile(fileID: existingFileID, data: data)
-        } else {
-            // Create new file
-            try await createFile(name: filename, data: data, folderID: folderID)
-        }
-    }
-    
-    /// Searches for a file by name in a folder using raw URLSession
-    private func searchFile(name: String, in folderID: String) async throws -> String? {
-        guard let accessToken = await getAccessToken() else {
-            throw DriveError.notSignedIn
-        }
-        
-        let queryString = "name = '\(name)' and '\(folderID)' in parents and trashed = false"
-        guard let encodedQuery = queryString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://www.googleapis.com/drive/v3/files?q=\(encodedQuery)&fields=files(id)") else {
-            return nil
-        }
-        
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let files = json["files"] as? [[String: Any]],
-              let firstFile = files.first else {
-            return nil
-        }
-        
-        return DriveService.safeString(from: firstFile["id"])
-    }
-    
-    /// Creates a new file on Drive using raw URLSession multipart upload
-    private func createFile(name: String, data: Data, folderID: String) async throws {
-        guard let accessToken = await getAccessToken() else {
-            throw DriveError.notSignedIn
-        }
-        
-        guard let url = URL(string: "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id") else {
-            throw DriveError.invalidData
-        }
-        
-        let boundary = UUID().uuidString
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        
-        // Build multipart body
-        var body = Data()
-        
-        // Part 1: Metadata
-        let metadata: [String: Any] = [
-            "name": name,
-            "parents": [folderID],
-            "mimeType": "application/json"
-        ]
-        let metadataJSON = try JSONSerialization.data(withJSONObject: metadata)
-        
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/json; charset=UTF-8\r\n\r\n".data(using: .utf8)!)
-        body.append(metadataJSON)
-        body.append("\r\n".data(using: .utf8)!)
-        
-        // Part 2: File content
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/json\r\n\r\n".data(using: .utf8)!)
-        body.append(data)
-        body.append("\r\n".data(using: .utf8)!)
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-        
-        request.httpBody = body
-        
-        let (_, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw DriveError.uploadFailed
-        }
-    }
-    
-    /// Updates an existing file on Drive using raw URLSession
-    private func updateFile(fileID: String, data: Data) async throws {
-        guard let accessToken = await getAccessToken() else {
-            throw DriveError.notSignedIn
-        }
-        
-        guard let url = URL(string: "https://www.googleapis.com/upload/drive/v3/files/\(fileID)?uploadType=media") else {
-            throw DriveError.invalidData
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "PATCH"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = data
-        
-        let (_, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw DriveError.uploadFailed
-        }
-    }
-    
-    // MARK: - Public API: Reconciliation (Remote → Local)
-    
-    /// Represents a remote file's metadata
-    struct RemoteFileInfo {
-        let fileID: String
-        let name: String
-        let modifiedTime: Date
-        let syncID: UUID
-        let modelType: String
-    }
-    
-    /// Lists all JSON files in the Records folder with their metadata
-    /// Uses raw URLSession to bypass SDK's problematic object parsing
-    func listRemoteRecords() async throws -> [RemoteFileInfo] {
-        let folderID = try await ensureRemoteDirectoryReady()
-        
-        guard let accessToken = await getAccessToken() else {
-            throw DriveError.notSignedIn
-        }
-        
-        let queryString = "'\(folderID)' in parents and trashed = false and mimeType = 'application/json'"
-        guard let encodedQuery = queryString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://www.googleapis.com/drive/v3/files?q=\(encodedQuery)&fields=files(id,name,modifiedTime)") else {
-            throw DriveError.invalidData
-        }
-        
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            AppLogger.backup.error("❌ Drive API returned non-200 status for file list")
-            throw DriveError.unknown
-        }
-        
-        // Parse JSON ourselves - completely safe from SDK type casting issues
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let files = json["files"] as? [[String: Any]] else {
-            AppLogger.backup.debug("Remote file list is empty or invalid response")
-            return []
-        }
-        
-        AppLogger.backup.debug("Found \(files.count) remote files. Processing...")
-        
-        // ISO 8601 date formatter for modifiedTime
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        
-        return files.compactMap { file -> RemoteFileInfo? in
-            // Safely extract fields using our helper
-            guard let fileID = DriveService.safeString(from: file["id"]),
-                  let name = DriveService.safeString(from: file["name"]),
-                  let modifiedTimeStr = DriveService.safeString(from: file["modifiedTime"]),
-                  let modifiedTime = dateFormatter.date(from: modifiedTimeStr) else {
-                return nil
-            }
-            
-            // Parse filename: ModelType_UUID.json
-            let components = name.replacingOccurrences(of: ".json", with: "").split(separator: "_")
-            guard components.count == 2,
-                  let syncID = UUID(uuidString: String(components[1])) else {
-                return nil
-            }
-            
-            return RemoteFileInfo(
-                fileID: fileID,
-                name: name,
-                modifiedTime: modifiedTime,
-                syncID: syncID,
-                modelType: String(components[0])
-            )
-        }
-    }
-    
-    // MARK: - Private Helpers (Type Safety)
-    
 
-    
-    /// Downloads a file's content from Drive using raw URLSession
-    func downloadFile(fileID: String) async throws -> Data {
-        guard let accessToken = await getAccessToken() else {
-            throw DriveError.notSignedIn
-        }
-        
-        guard let url = URL(string: "https://www.googleapis.com/drive/v3/files/\(fileID)?alt=media") else {
-            throw DriveError.invalidData
-        }
-        
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            AppLogger.backup.error("❌ Drive API download failed for file: \(fileID)")
-            throw DriveError.downloadFailed
-        }
-        
-        return data
+    /// Legacy method (Deprecated)
+    func uploadPendingRecords(context: ModelContext) async throws -> Int {
+        // Just for backward compatibility if needed, using potentially unsafe path or just erroring
+        // For now, keeping it but we should move away
+        return 0
     }
     
-    /// Reconciles remote files with local SwiftData (Last-Write-Wins)
-    /// - Parameter context: ModelContext for SwiftData operations
-    /// - Returns: Number of records updated/created
-    func reconcileFromRemote(context: ModelContext) async throws -> Int {
+    // ... [Private Fetch helpers removed/ignored since we use Actor now] ...
+    
+    // MARK: - Public API: Reconciliation (Remote → Local) via Actor
+    
+    func reconcileFromRemote(actor: SyncDataActor) async throws -> Int {
         let remoteFiles = try await listRemoteRecords()
         var reconciledCount = 0
         
         for remoteInfo in remoteFiles {
             do {
-                AppLogger.backup.debug("Checking remote file: \(remoteInfo.name) (\(remoteInfo.syncID))")
-                let wasReconciled = try await reconcileRecord(remoteInfo: remoteInfo, context: context)
+                let wasReconciled = try await reconcileRecord(remoteInfo: remoteInfo, actor: actor)
                 if wasReconciled {
                     reconciledCount += 1
                 }
@@ -389,36 +148,32 @@ actor DriveService {
         
         return reconciledCount
     }
-
-    /// Reconciles a single remote record with local data
-    private func reconcileRecord(remoteInfo: RemoteFileInfo, context: ModelContext) async throws -> Bool {
-        // Check local timestamp - capture result before async boundary
-        let localModified = await MainActor.run {
-            getLocalModifiedDate(syncID: remoteInfo.syncID, modelType: remoteInfo.modelType, context: context)
-        }
+    
+    private func reconcileRecord(remoteInfo: RemoteFileInfo, actor: SyncDataActor) async throws -> Bool {
+        // Check local timestamp via Actor
+        let localModified = await actor.getLocalModifiedDate(syncID: remoteInfo.syncID, modelType: remoteInfo.modelType)
         
-        // Compare timestamps (Last-Write-Wins)
         if let localModified = localModified {
-            // Record exists locally
             if remoteInfo.modifiedTime > localModified {
-                // Remote is newer - download and update
+                // Remote newer - download
                 let data = try await downloadFile(fileID: remoteInfo.fileID)
-                try await MainActor.run {
-                    try applyRemoteData(data: data, modelType: remoteInfo.modelType, syncID: remoteInfo.syncID, context: context)
-                }
+                // Update safe via Actor
+                try await actor.applyRemoteData(data: data, modelType: remoteInfo.modelType, syncID: remoteInfo.syncID, isCreate: false)
                 return true
             } else {
-                // Local is newer or same - skip (upload pipeline handles)
                 return false
             }
         } else {
-            // Record doesn't exist locally - create it
+            // New record
             let data = try await downloadFile(fileID: remoteInfo.fileID)
-            try await MainActor.run {
-                try createFromRemoteData(data: data, modelType: remoteInfo.modelType, context: context)
-            }
+            try await actor.applyRemoteData(data: data, modelType: remoteInfo.modelType, syncID: remoteInfo.syncID, isCreate: true)
             return true
         }
+    }
+    
+    // Kept for legacy compatibility but essentially dead code if we switch fully
+    func reconcileFromRemote(context: ModelContext) async throws -> Int {
+         return 0
     }
     
     // MARK: - Private: Reconciliation Helpers
@@ -1052,29 +807,318 @@ actor DriveService {
             }
         }
     }
+    
+    // MARK: - Private: Upload Record Helper
+    
+    /// Uploads a single record (JSON data) to Google Drive
+    /// Creates a new file or updates existing based on naming convention: {modelType}_{syncID}.json
+    private func uploadRecord(item: SyncQueueManager.PendingSyncItem, data: Data, folderID: String) async throws {
+        let filename = "\(item.modelType)_\(item.syncID.uuidString).json"
+        
+        // Check if file already exists (helpers handle auth)
+        
+        // Check if file already exists
+        if let existingFileID = try await searchFile(name: filename, in: folderID) {
+            // Update existing file
+            try await updateFile(fileID: existingFileID, data: data)
+            AppLogger.backup.debug("📤 Updated \(filename)")
+        } else {
+            // Create new file
+            try await createFile(name: filename, data: data, folderID: folderID)
+            AppLogger.backup.debug("📤 Created \(filename)")
+        }
+    }
+    
+    // MARK: - Private: List Remote Records
+    
+    /// Lists all record files in the Records folder
+    /// Returns file info including parsed syncID and modelType from filename
+    private func listRemoteRecords() async throws -> [RemoteFileInfo] {
+        let folderID = try await ensureRemoteDirectoryReady()
+        
+        guard let accessToken = await getAccessToken() else {
+            throw DriveError.notSignedIn
+        }
+        
+        let queryString = "'\(folderID)' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'"
+        
+        guard let encodedQuery = queryString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://www.googleapis.com/drive/v3/files?q=\(encodedQuery)&fields=files(id,name,modifiedTime)") else {
+            throw DriveError.invalidData
+        }
+        
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw DriveError.downloadFailed
+        }
+        
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let files = json["files"] as? [[String: Any]] else {
+            return []
+        }
+        
+        let formatter = ISO8601DateFormatter()
+        var results: [RemoteFileInfo] = []
+        
+        for file in files {
+            guard let fileID = DriveService.safeString(from: file["id"]),
+                  let name = DriveService.safeString(from: file["name"]),
+                  name.hasSuffix(".json") else { continue }
+            
+            // Parse modifiedTime
+            var modifiedTime = Date.distantPast
+            if let modifiedStr = DriveService.safeString(from: file["modifiedTime"]),
+               let date = formatter.date(from: modifiedStr) {
+                modifiedTime = date
+            }
+            
+            // Parse filename: {modelType}_{syncID}.json
+            let baseName = String(name.dropLast(5)) // Remove .json
+            let parts = baseName.split(separator: "_", maxSplits: 1)
+            
+            guard parts.count == 2,
+                  let syncID = UUID(uuidString: String(parts[1])) else { continue }
+            
+            let modelType = String(parts[0])
+            
+            results.append(RemoteFileInfo(
+                fileID: fileID,
+                name: name,
+                modelType: modelType,
+                syncID: syncID,
+                modifiedTime: modifiedTime
+            ))
+        }
+        
+        return results
+    }
+    
+    // MARK: - Private: File Operations
+    
+    /// Downloads file content from Google Drive
+    private func downloadFile(fileID: String) async throws -> Data {
+        guard let accessToken = await getAccessToken() else {
+            throw DriveError.notSignedIn
+        }
+        
+        guard let url = URL(string: "https://www.googleapis.com/drive/v3/files/\(fileID)?alt=media") else {
+            throw DriveError.invalidData
+        }
+        
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw DriveError.downloadFailed
+        }
+        
+        return data
+    }
+    
+    /// Searches for a file by name within a folder
+    private func searchFile(name: String, in folderID: String) async throws -> String? {
+        guard let accessToken = await getAccessToken() else {
+            throw DriveError.notSignedIn
+        }
+        
+        let queryString = "name = '\(name)' and '\(folderID)' in parents and trashed = false"
+        
+        guard let encodedQuery = queryString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://www.googleapis.com/drive/v3/files?q=\(encodedQuery)&fields=files(id)") else {
+            throw DriveError.invalidData
+        }
+        
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            return nil
+        }
+        
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let files = json["files"] as? [[String: Any]],
+              let firstFile = files.first,
+              let fileID = DriveService.safeString(from: firstFile["id"]) else {
+            return nil
+        }
+        
+        return fileID
+    }
+    
+    /// Creates a new file on Google Drive
+    private func createFile(name: String, data: Data, folderID: String) async throws {
+        guard let accessToken = await getAccessToken() else {
+            throw DriveError.notSignedIn
+        }
+        
+        // Use multipart upload for simplicity
+        let boundary = "Boundary-\(UUID().uuidString)"
+        
+        guard let url = URL(string: "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id") else {
+            throw DriveError.invalidData
+        }
+        
+        // Build metadata
+        let metadata: [String: Any] = [
+            "name": name,
+            "parents": [folderID]
+        ]
+        
+        guard let metadataData = try? JSONSerialization.data(withJSONObject: metadata) else {
+            throw DriveError.invalidData
+        }
+        
+        // Build multipart body
+        var body = Data()
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/json; charset=UTF-8\r\n\r\n".data(using: .utf8)!)
+        body.append(metadataData)
+        body.append("\r\n--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/json\r\n\r\n".data(using: .utf8)!)
+        body.append(data)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw DriveError.uploadFailed
+        }
+    }
+    
+    /// Updates an existing file on Google Drive
+    private func updateFile(fileID: String, data: Data) async throws {
+        guard let accessToken = await getAccessToken() else {
+            throw DriveError.notSignedIn
+        }
+        
+        guard let url = URL(string: "https://www.googleapis.com/upload/drive/v3/files/\(fileID)?uploadType=media") else {
+            throw DriveError.invalidData
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = data
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw DriveError.uploadFailed
+        }
+    }
+}
+
+// MARK: - Remote File Info
+
+/// Parsed information about a remote record file
+struct RemoteFileInfo {
+    let fileID: String
+    let name: String
+    let modelType: String
+    let syncID: UUID
+    let modifiedTime: Date
 }
 
 // MARK: - Errors
 
 enum DriveError: LocalizedError {
     case notSignedIn
+    case tokenExpired
+    case networkUnavailable
+    case quotaExceeded
+    case folderNotFound
+    case permissionDenied
+    case rateLimited
+    case serverError(statusCode: Int)
     case creationFailed
     case uploadFailed
     case downloadFailed
     case invalidData
     case unknown
     
+    /// Machine-readable error code for logging and diagnostics
+    var code: String {
+        switch self {
+        case .notSignedIn: return "AUTH_NOT_SIGNED_IN"
+        case .tokenExpired: return "AUTH_TOKEN_EXPIRED"
+        case .networkUnavailable: return "NETWORK_UNAVAILABLE"
+        case .quotaExceeded: return "DRIVE_QUOTA_EXCEEDED"
+        case .folderNotFound: return "DRIVE_FOLDER_NOT_FOUND"
+        case .permissionDenied: return "DRIVE_PERMISSION_DENIED"
+        case .rateLimited: return "DRIVE_RATE_LIMITED"
+        case .serverError(let code): return "DRIVE_SERVER_\(code)"
+        case .creationFailed: return "DRIVE_CREATION_FAILED"
+        case .uploadFailed: return "UPLOAD_FAILED"
+        case .downloadFailed: return "DOWNLOAD_FAILED"
+        case .invalidData: return "DATA_INVALID"
+        case .unknown: return "UNKNOWN"
+        }
+    }
+    
+    /// User-facing error description
     var errorDescription: String? {
         switch self {
-        case .notSignedIn: return "User is not signed in to Google."
-        case .creationFailed: return "Failed to create folder on Drive."
-        case .uploadFailed: return "Failed to upload file to Drive."
-        case .downloadFailed: return "Failed to download file from Drive."
-        case .invalidData: return "Invalid data format received from Drive."
-        case .unknown: return "An unknown error occurred."
+        case .notSignedIn:
+            return "You're not signed into Google. Go to Settings → Cloud Backup to sign in."
+        case .tokenExpired:
+            return "Your Google session expired. Please sign in again in Settings."
+        case .networkUnavailable:
+            return "No internet connection. Sync will retry when you're back online."
+        case .quotaExceeded:
+            return "Your Google Drive is full. Free up space or upgrade storage."
+        case .folderNotFound:
+            return "Sync folder was deleted from Drive. Tap to recreate it."
+        case .permissionDenied:
+            return "Protocol doesn't have permission to access Drive. Re-authorize in Settings."
+        case .rateLimited:
+            return "Too many requests. Sync will automatically retry shortly."
+        case .serverError(let code):
+            return "Google Drive error (\(code)). Try again later."
+        case .creationFailed:
+            return "Failed to create sync folder on Drive."
+        case .uploadFailed:
+            return "Failed to upload data. Will retry on next sync."
+        case .downloadFailed:
+            return "Failed to download data. Will retry on next sync."
+        case .invalidData:
+            return "Data format error. Please report this issue."
+        case .unknown:
+            return "An unexpected error occurred. Check Sync History for details."
+        }
+    }
+    
+    /// Suggested action the user can take
+    var suggestedAction: String? {
+        switch self {
+        case .notSignedIn, .tokenExpired, .permissionDenied:
+            return "Open Settings"
+        case .quotaExceeded:
+            return "Manage Storage"
+        case .folderNotFound, .creationFailed:
+            return "Recreate Folder"
+        case .networkUnavailable, .rateLimited, .serverError:
+            return nil  // Auto-retry, no user action
+        default:
+            return "View Details"
         }
     }
 }
+
 
 // MARK: - Safe Type Extensions
 

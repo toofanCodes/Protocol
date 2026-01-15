@@ -65,6 +65,26 @@ final class MoleculeTemplate {
     /// Archived templates are hidden from the list but preserved for history
     var isArchived: Bool = false
     
+    // MARK: - Retirement Properties
+    
+    /// Status of the retirement process: nil (Active), "pending", or "retired"
+    var retirementStatus: String?
+    
+    /// Date when the user initiated retirement
+    var retirementDate: Date?
+    
+    /// The reason for retirement (e.g., "Changed routine", "Goal reached")
+    var retirementReason: String?
+    
+    /// Deadline for undoing the retirement (Initial action date + 24 hours)
+    var undoDeadline: Date?
+    
+    /// Action to take for future instances: "deleteAll", "keepAsOrphans", "deleteAfterDate"
+    var futureAction: String?
+    
+    /// Specific cutoff date if futureAction is "deleteAfterDate"
+    var deleteAfterDate: Date?
+    
     // MARK: - Icon Properties
     
     /// Custom icon symbol (1-2 chars/emoji). Nil = use first letter of title
@@ -127,7 +147,14 @@ final class MoleculeTemplate {
         iconSymbol: String? = nil,
         iconFrame: IconFrameStyle = .circle,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        // Retirement params
+        retirementStatus: String? = nil,
+        retirementDate: Date? = nil,
+        retirementReason: String? = nil,
+        undoDeadline: Date? = nil,
+        futureAction: String? = nil,
+        deleteAfterDate: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -145,6 +172,13 @@ final class MoleculeTemplate {
         self.iconFrameRaw = iconFrame.rawValue
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        
+        self.retirementStatus = retirementStatus
+        self.retirementDate = retirementDate
+        self.retirementReason = retirementReason
+        self.undoDeadline = undoDeadline
+        self.futureAction = futureAction
+        self.deleteAfterDate = deleteAfterDate
     }
     
     // MARK: - Computed Properties

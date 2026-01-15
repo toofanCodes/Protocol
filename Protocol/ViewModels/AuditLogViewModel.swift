@@ -96,15 +96,19 @@ final class AuditLogViewModel: ObservableObject {
     }
     
     func exportAsCSV() {
-        let entriesToExport = filteredEntries // Capture before detached task
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let csv = Self.generateCSV(from: entriesToExport)
+        let entriesToExport = filteredEntries // Capture data (value type) on MainActor
+        
+        Task.detached(priority: .userInitiated) {
+            // Run expensive generation off-main-actor
+            let csvString = AuditLogViewModel.generateCSV(from: entriesToExport)
             
+            // Save to temp file
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("audit_log.csv")
             do {
-                try csv.write(to: tempURL, atomically: true, encoding: .utf8)
+                try csvString.write(to: tempURL, atomically: true, encoding: .utf8)
                 
-                await MainActor.run {
+                // Update UI back on MainActor
+                await MainActor.run { [weak self] in
                     self?.shareItems = [tempURL]
                     self?.showingExportSheet = true
                 }

@@ -26,8 +26,9 @@ struct ProtocolApp: App {
     // MARK: - Initializer
     
     init() {
-        // Register background task scheduler
+        // Register background task schedulers
         BackgroundScheduler.shared.registerBackgroundTask()
+        BackgroundSyncScheduler.shared.registerTask()
     }
     
     // MARK: - Body
@@ -136,16 +137,20 @@ struct ProtocolApp: App {
     private func handleScenePhaseChange(from oldPhase: ScenePhase, to newPhase: ScenePhase) {
         switch newPhase {
         case .active:
-            // Refresh notifications when app becomes active
+// Refresh notifications when app becomes active
             Task {
                 await BackgroundScheduler.shared.refreshNotifications()
                 await BackupManager.shared.autoBackup(context: sharedModelContainer.mainContext)
+                await RetirementService.shared.checkPendingRetirements(context: sharedModelContainer.mainContext)
+                await RetirementService.shared.configure(with: sharedModelContainer)
+                await RetirementService.shared.resumeInterruptedRetirements()
             }
             // Sync with cloud in background (fire-and-forget, never blocks)
-            SyncEngine.shared.performFullSyncSafely(context: sharedModelContainer.mainContext)
+            SyncEngine.shared.performFullSyncSafely(container: sharedModelContainer)
         case .background:
-            // Schedule background refresh when entering background
+            // Schedule background refreshes when entering background
             BackgroundScheduler.shared.scheduleAppRefresh()
+            BackgroundSyncScheduler.shared.scheduleNextSync()
         case .inactive:
             break
         @unknown default:
@@ -159,7 +164,7 @@ struct ProtocolApp: App {
             await GoogleAuthManager.shared.restorePreviousSignIn()
             // Trigger initial sync in background (fire-and-forget, never blocks)
             if GoogleAuthManager.shared.isSignedIn {
-                SyncEngine.shared.performFullSyncSafely(context: sharedModelContainer.mainContext)
+                SyncEngine.shared.performFullSyncSafely(container: sharedModelContainer)
             }
         }
     }

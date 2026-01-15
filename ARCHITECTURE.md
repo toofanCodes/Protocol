@@ -72,40 +72,40 @@ settings.updateMetadata { $0.theme = .dark }
 
 ## Schema Migration
 
-We use **SwiftData's VersionedSchema** for safe migrations:
+We use **SwiftData's Lightweight Migration** for flexibility and speed. Complex `VersionedSchema` logic has been removed in favor of a flat schema approach:
 
 ```swift
-enum SchemaV3: VersionedSchema {
-    static var versionIdentifier = Schema.Version(3, 0, 0)
-    static var models: [any PersistentModel.Type] { [...] }
-}
-
-enum AppMigrationPlan: SchemaMigrationPlan {
-    static var schemas: [any VersionedSchema.Type] { [SchemaV1.self, SchemaV2.self, SchemaV3.self] }
-    static var stages: [MigrationStage] { [migrateV1toV2, migrateV2toV3] }
-}
+let schema = Schema([
+    MoleculeTemplate.self,
+    MoleculeInstance.self,
+    AtomTemplate.self,
+    AtomInstance.self,
+    WorkoutSet.self,
+    UserSettings.self,
+    PersistentAuditLog.self
+])
 ```
 
-**Adding a new schema version:**
-1. Create `SchemaVN` with updated models.
-2. Add a migration stage to `AppMigrationPlan.stages`.
-3. Update `schemas` to include all versions.
+**Migration Strategy:**
+- **Additions**: New properties (like `iconSymbol`) must have default values. SwiftData handles column addition automatically.
+- **Deletions**: Unused properties are ignored.
+- **Renames**: Requires custom `Stage` logic (currently not implemented; avoid renaming).
 
 ---
 
-## Schema Migration History
+## Schema History
 
 ### V3.0.0 (January 7, 2026) — Current
+**Major Feature:** Cloud Sync & Soft Delete
+- Added `SyncableRecord` conformance (IDs, `updatedAt`).
+- Added `PersistentAuditLog` model for atomic transaction logging.
+- `MoleculeTemplate`: Added `isArchived`.
 
-**Changes:**
-- `AtomTemplate`: Added `updatedAt: Date` for sync tracking
-- All models conforming to `SyncableRecord` protocol for cloud sync
+### V2.0.0
+- Added `iconSymbol`, `iconFrameRaw` to templates.
 
-**Backup Restoration Behavior:**
-When restoring a pre-V3 backup, `AtomTemplate.updatedAt` will be set to restore time (`Date()`), NOT the original modification time. This is expected because:
-- The field didn't exist in older schemas
-- Future edits will update it correctly
-- For sync purposes, "restored now" is an acceptable baseline
+### V1.0.0
+- Initial schema.
 
 ---
 

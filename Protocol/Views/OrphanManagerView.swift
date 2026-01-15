@@ -12,8 +12,8 @@ struct OrphanManagerView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     
-    // Fetch all instances that have no parent template
-    @Query(filter: #Predicate<MoleculeInstance> { $0.parentTemplate == nil }, sort: \MoleculeInstance.scheduledDate)
+    // Fetch all instances that have no parent template OR are explicitly marked as orphans
+    @Query(filter: #Predicate<MoleculeInstance> { $0.parentTemplate == nil || $0.isOrphan }, sort: \MoleculeInstance.scheduledDate)
     private var orphans: [MoleculeInstance]
     
     @State private var selection = Set<MoleculeInstance>()
@@ -41,6 +41,13 @@ struct OrphanManagerView: View {
                                     Text(instance.displayTitle)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    
+                                    if let originalTitle = instance.originalMoleculeTitle {
+                                        Text("From: \(originalTitle)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                            .padding(.top, 1)
+                                    }
                                 }
                                 Spacer()
                                 if instance.isCompleted {
@@ -221,6 +228,8 @@ struct OrphanManagerView: View {
         // 3. Link Selected Instances & Their Atoms
         for instance in selection {
             instance.parentTemplate = newTemplate
+            instance.isOrphan = false
+            instance.originalMoleculeTitle = nil
             
             // Link existing atom instances to the new atom templates
             for atom in instance.atomInstances {

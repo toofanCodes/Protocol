@@ -57,7 +57,7 @@ struct HabitPerformance: Identifiable {
 @MainActor
 final class AnalyticsQueryService {
     
-    private let modelContext: ModelContext
+    let modelContext: ModelContext
     
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
